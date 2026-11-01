@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { chargeFor, newOrderId } from "../lib/engine";
 import type { NightMode, SpeedProfile } from "../lib/engine";
 import { addOrder, useServices } from "../lib/store";
@@ -24,6 +24,10 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   const [startTime, setStartTime] = useState("");
   const [durationMs, setDurationMs] = useState<number | undefined>(undefined);
   const [autoHuman, setAutoHuman] = useState(false);
+
+  // Stable preview timestamp so the preview graph doesn't regenerate (and
+  // change) on every re-render — only when settings actually change.
+  const previewCreatedAtRef = useRef(Date.now());
   const [error, setError] = useState("");
 
   const activeCategory = categories.includes(category) ? category : categories[0] ?? "";
@@ -50,7 +54,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     quantity: Number(quantity) || 1000,
     likes: Number(likes) || 0,
     charge: 0,
-    createdAt: Date.now(),
+    createdAt: previewCreatedAtRef.current,
     profile,
     ...(profile === "custom" ? { cMinDrop, cMaxDrop, cMinGap, cMaxGap } : {}),
     night,
