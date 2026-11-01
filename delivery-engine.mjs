@@ -37,10 +37,10 @@ function paceAt(profile, frac) {
 }
 
 const PROFILES = {
-  safe: { minDrop: 120, maxDrop: 220, minGap: 12, maxGap: 20 },
-  normal: { minDrop: 220, maxDrop: 380, minGap: 6, maxGap: 12 },
-  turbo: { minDrop: 450, maxDrop: 750, minGap: 3, maxGap: 6 },
-  micro: { minDrop: 90, maxDrop: 150, minGap: 2, maxGap: 4 },
+  safe: { minDrop: 120, maxDrop: 220, minGap: 15, maxGap: 30 },
+  normal: { minDrop: 220, maxDrop: 380, minGap: 15, maxGap: 30 },
+  turbo: { minDrop: 450, maxDrop: 750, minGap: 15, maxGap: 30 },
+  micro: { minDrop: 90, maxDrop: 150, minGap: 15, maxGap: 30 },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30 },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4 },
 };
@@ -273,6 +273,7 @@ function organicSchedule(o) {
   const baseAmount = q / n;
   const ticks = [];
   let cum = 0;
+  let lastT = 0;
 
   for (let i = 0; i < n; i++) {
     const p = i / n;
@@ -285,6 +286,11 @@ function organicSchedule(o) {
     const jitter = (rnd() + rnd() + rnd() - 1.5) * 0.08;
     const f = Math.max(0.02, Math.min(0.98, centers[si] + jitter));
     let t = o.createdAt + Math.round(f * dur);
+
+    if (lastT && t - lastT < 15 * 60_000) {
+      t = lastT + (15 + rnd() * 15) * 60_000;
+    }
+    lastT = t;
 
     if (isNight(t)) {
       const d = new Date(t + IST);

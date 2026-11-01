@@ -33,12 +33,11 @@ export interface ProfileParams {
 }
 
 export const PROFILES: Record<Exclude<SpeedProfile, "custom">, ProfileParams> = {
-  // Speeds tuned ~2x faster so orders complete in roughly half the time and
-  // never feel stalled.
-  safe: { minDrop: 120, maxDrop: 220, minGap: 12, maxGap: 20, label: "Safe" },
-  normal: { minDrop: 220, maxDrop: 380, minGap: 6, maxGap: 12, label: "Normal" },
-  turbo: { minDrop: 450, maxDrop: 750, minGap: 3, maxGap: 6, label: "Turbo" },
-  micro: { minDrop: 90, maxDrop: 150, minGap: 2, maxGap: 4, label: "Micro Fast" },
+  // Batch gaps are kept at 15–30 minutes (human-like cadence).
+  safe: { minDrop: 120, maxDrop: 220, minGap: 15, maxGap: 30, label: "Safe" },
+  normal: { minDrop: 220, maxDrop: 380, minGap: 15, maxGap: 30, label: "Normal" },
+  turbo: { minDrop: 450, maxDrop: 750, minGap: 15, maxGap: 30, label: "Turbo" },
+  micro: { minDrop: 90, maxDrop: 150, minGap: 15, maxGap: 30, label: "Micro Fast" },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30, label: "S-Curve" },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4, label: "Stealth" },
 };
@@ -196,6 +195,7 @@ function organicSchedule(o: Order): Tick[] {
   const baseAmount = q / n;
   const ticks: Tick[] = [];
   let cum = 0;
+  let lastT = 0;
 
   for (let i = 0; i < n; i++) {
     const p = i / n;
@@ -208,6 +208,12 @@ function organicSchedule(o: Order): Tick[] {
     const jitter = (rnd() + rnd() + rnd() - 1.5) * 0.08;
     const f = Math.max(0.02, Math.min(0.98, centers[si]! + jitter));
     let t = o.createdAt + Math.round(f * dur);
+
+    // Enforce a minimum 15-minute gap between consecutive drops (human-like).
+    if (lastT && t - lastT < 15 * 60_000) {
+      t = lastT + (15 + rnd() * 15) * 60_000;
+    }
+    lastT = t;
 
     // Avoid deep-night pushes: shift to next 7am so activity looks like a human
     // awake during the day (huge detection signal).
