@@ -248,11 +248,64 @@ function humanAutoSchedule(o) {
   return ticks;
 }
 
+// Organic, human-like delivery. Session clusters, jittered batch sizes, natural
+// ramp-up/down, unpredictable total window. Seeded by order id + createdAt so
+// it's stable across renders yet unique per order.
+function organicSchedule(o) {
+  const q = o.quantity;
+  let seed = (o.createdAt || 0) ^ (typeof o.id === "string" ? o.id.length * 2654435761 : 0);
+  const rnd = mulberry32(seed);
+
+  const baseHours = (q / 1000) * (1 + rnd() * 1.8);
+  const dur = Math.max(2 * 3600_000, Math.min(20 * 3600_000, baseHours * 3600_000));
+  const sessions = 3 + Math.floor(rnd() * 5);
+
+  const centers = [];
+  let acc = 0.06 + rnd() * 0.1;
+  for (let s = 0; s < sessions; s++) {
+    centers.push(acc);
+    acc += 0.14 + rnd() * 0.22;
+  }
+  const lastC = centers[centers.length - 1] || 1;
+  for (let s = 0; s < centers.length; s++) centers[s] = centers[s] / (lastC * 1.15);
+
+  const n = Math.max(12, Math.min(300, Math.round(q / 60)));
+  const baseAmount = q / n;
+  const ticks = [];
+  let cum = 0;
+
+  for (let i = 0; i < n; i++) {
+    const p = i / n;
+    let si = 0;
+    let best = Infinity;
+    for (let s = 0; s < centers.length; s++) {
+      const d = Math.abs(centers[s] - p);
+      if (d < best) { best = d; si = s; }
+    }
+    const jitter = (rnd() + rnd() + rnd() - 1.5) * 0.08;
+    const f = Math.max(0.02, Math.min(0.98, centers[si] + jitter));
+    const t = o.createdAt + Math.round(f * dur);
+
+    let amount = Math.max(1, Math.round(baseAmount * (0.55 + rnd() * 0.9)));
+    if (cum + amount > q) amount = q - cum;
+    if (amount <= 0) break;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({ t, amount: drop, likes: Math.round((drop / q) * (o.likes || 0)), cumulative: Math.min(cum, q) });
+    if (cum >= q) break;
+  }
+
+  ticks.sort((a, b) => a.t - b.t);
+  if (ticks.length > 0) ticks[ticks.length - 1].cumulative = q;
+  return ticks;
+}
+
 function schedule(o) {
-  if (o.autoHuman) return humanAutoSchedule(o);
+  if (o.autoHuman) return organicSchedule(o);
   if (o.durationMs) return timedSchedule(o);
   if (o.profile === "scurve") return sCurveSchedule(o);
-  if (o.profile === "stealth") return stealthSchedule(o);
+  if (o.profile === "stealth") return organicSchedule(o);
   const p = profileParams(o);
   const ticks = [];
   let t = o.createdAt;

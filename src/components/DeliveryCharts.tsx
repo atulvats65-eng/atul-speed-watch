@@ -41,32 +41,48 @@ export function GrowthChart({ ticks, now, showLikes, height = 260 }: { ticks: Ti
   const px = (x: number) => L + x * iw;
   const py = (y: number) => T + (1 - y) * ih;
 
-  const buildLine = (get: (d: Pt) => number | null) =>
-    data
-      .map((d, i) => {
-        const v = get(d);
-        if (v === null) return null;
-        const p = { x: px((d.t - t0) / dur), y: py(v / maxY) };
-        return i === 0 ? `M${p.x.toFixed(1)},${p.y.toFixed(1)}` : `L${p.x.toFixed(1)},${p.y.toFixed(1)}`;
-      })
-      .filter((s): s is string => Boolean(s))
-      .join(" ");
+  const toPoints = (get: (d: Pt) => number | null) => {
+    let prev: number | null = null;
+    const pts: { x: number; y: number }[] = [];
+    data.forEach((d) => {
+      const v = get(d) ?? prev;
+      prev = v;
+      if (v === null) return;
+      pts.push({ x: px((d.t - t0) / dur), y: py(v / maxY) });
+    });
+    return pts;
+  };
 
-  const planned = buildLine((d) => d.planned);
-  const delivered = buildLine((d) => d.delivered);
-  const likesLine = showLikes ? buildLine((d) => d.likes) : "";
+  // Catmull-Rom → cubic bezier smoothing for an organic, IG-style curve.
+  const smoothPath = (pts: { x: number; y: number }[]) => {
+    if (pts.length === 0) return "";
+    if (pts.length === 1) return `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
+    let d = `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] ?? pts[i]!;
+      const p1 = pts[i]!;
+      const p2 = pts[i + 1]!;
+      const p3 = pts[i + 2] ?? p2;
+      const c1x = p1.x + (p2.x - p0.x) / 6;
+      const c1y = p1.y + (p2.y - p0.y) / 6;
+      const c2x = p2.x - (p3.x - p1.x) / 6;
+      const c2y = p2.y - (p3.y - p1.y) / 6;
+      d += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+    }
+    return d;
+  };
 
-  // area path under delivered (with last-known fallback)
+  const planned = smoothPath(toPoints((d) => d.planned));
+  const delivered = smoothPath(toPoints((d) => d.delivered));
+  const likesLine = showLikes ? smoothPath(toPoints((d) => d.likes)) : "";
+
+  // area path under delivered (smoothed)
+  const deliveredPts = toPoints((d) => d.delivered);
   let area = "";
-  let prev: number | null = null;
-  data.forEach((d, i) => {
-    const v = d.delivered !== null ? d.delivered : prev;
-    prev = v;
-    const x = px((d.t - t0) / dur);
-    if (i === 0) area = `M${x.toFixed(1)},${py(0).toFixed(1)} L${x.toFixed(1)},${py((v ?? 0) / maxY).toFixed(1)}`;
-    else area += ` L${x.toFixed(1)},${py((v ?? 0) / maxY).toFixed(1)}`;
-  });
-  area += ` L${px(1).toFixed(1)},${py(0).toFixed(1)} Z`;
+  if (deliveredPts.length > 0) {
+    area = `M${deliveredPts[0]!.x.toFixed(1)},${py(0).toFixed(1)} ` + smoothPath(deliveredPts);
+    area += ` L${px(1).toFixed(1)},${py(0).toFixed(1)} Z`;
+  }
 
   const gid = "growthG";
 

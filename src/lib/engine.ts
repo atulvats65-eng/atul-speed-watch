@@ -170,10 +170,68 @@ function mulberry32(a: number) {
   };
 }
 
+// Organic, human-like delivery. Builds session clusters with variable spacing,
+// jittered batch sizes, natural ramp-up/down and unpredictable total window.
+// Seeded by order id + createdAt so it's stable across renders yet unique per
+// order — much harder for bot / human heuristics to fingerprint.
+function organicSchedule(o: Order): Tick[] {
+  const q = o.quantity;
+  let seed = o.createdAt ^ (typeof o.id === "string" ? o.id.length * 2654435761 : 0);
+  const rnd = mulberry32(seed);
+
+  const baseHours = (q / 1000) * (1 + rnd() * 1.8);
+  const dur = Math.max(2 * 3600_000, Math.min(20 * 3600_000, baseHours * 3600_000));
+  const sessions = 3 + Math.floor(rnd() * 5); // 3–7 sessions
+
+  const centers: number[] = [];
+  let acc = 0.06 + rnd() * 0.1;
+  for (let s = 0; s < sessions; s++) {
+    centers.push(acc);
+    acc += 0.14 + rnd() * 0.22;
+  }
+  const lastC = centers[centers.length - 1]! || 1;
+  for (let s = 0; s < centers.length; s++) centers[s] = centers[s]! / (lastC * 1.15);
+
+  const n = Math.max(12, Math.min(300, Math.round(q / 60)));
+  const baseAmount = q / n;
+  const ticks: Tick[] = [];
+  let cum = 0;
+
+  for (let i = 0; i < n; i++) {
+    const p = i / n;
+    let si = 0;
+    let best = Infinity;
+    for (let s = 0; s < centers.length; s++) {
+      const d = Math.abs(centers[s]! - p);
+      if (d < best) { best = d; si = s; }
+    }
+    const jitter = (rnd() + rnd() + rnd() - 1.5) * 0.08;
+    const f = Math.max(0.02, Math.min(0.98, centers[si]! + jitter));
+    const t = o.createdAt + Math.round(f * dur);
+
+    let amount = Math.max(1, Math.round(baseAmount * (0.55 + rnd() * 0.9)));
+    if (cum + amount > q) amount = q - cum;
+    if (amount <= 0) break;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({ t, amount: drop, likes: Math.round((drop / q) * o.likes), cumulative: Math.min(cum, q) });
+    if (cum >= q) break;
+  }
+
+  ticks.sort((a, b) => a.t - b.t);
+  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
+  return ticks;
+}
+
 // Stealth delivery: mimics a real human. Small organic batches, session-based
 // activity separated by long gaps, randomized timing, natural ramp-up/taper,
 // and no late-night pushing. Hard for human/AI heuristics to flag as bot work.
 function stealthSchedule(o: Order): Tick[] {
+  return organicSchedule(o);
+}
+
+function stealthScheduleLegacy(o: Order): Tick[] {
   const q = o.quantity;
   const duration = Math.min(STEALTH_MAX, Math.max(STEALTH_MIN, (q / 1000) * STEALTH_PER_1000));
   const rnd = mulberry32(o.createdAt ^ 0x5f3759df);
@@ -300,34 +358,7 @@ function timedSchedule(o: Order): Tick[] {
 // quantity but jittered) and delivers with irregular, human-like spread so the
 // order doesn't look machine-generated. Deterministic (seeded).
 function humanAutoSchedule(o: Order): Tick[] {
-  const q = o.quantity;
-  const baseDur = (q / 1000) * 1.5 * 3600_000;
-  const dur = Math.max(2 * 3600_000, Math.min(18 * 3600_000, baseDur));
-  const n = Math.max(10, Math.min(200, Math.round(q / 120)));
-  const baseAmount = q / n;
-  const rnd = mulberry32(o.createdAt ^ 0xabcdef01);
-  const ticks: Tick[] = [];
-  let cum = 0;
-  for (let i = 1; i <= n; i++) {
-    const f = (rnd() + rnd()) / 2; // bell-ish → more activity mid-window
-    const t = o.createdAt + Math.round(f * dur);
-    let amount = Math.max(1, Math.round(baseAmount * (0.7 + rnd() * 0.6)));
-    if (cum + amount > q) amount = q - cum;
-    if (amount <= 0) break;
-    cum += amount;
-    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
-    const drop = Math.max(1, Math.round(amount * nightSlow));
-    ticks.push({
-      t,
-      amount: drop,
-      likes: Math.round((drop / q) * o.likes),
-      cumulative: Math.min(cum, q),
-    });
-    if (cum >= q) break;
-  }
-  ticks.sort((a, b) => a.t - b.t);
-  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
-  return ticks;
+  return organicSchedule(o);
 }
 
 export function schedule(o: Order): Tick[] {
