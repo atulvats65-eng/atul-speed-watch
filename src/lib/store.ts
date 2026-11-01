@@ -185,6 +185,7 @@ export function saveApiServices(list: ApiService[]) {
     rate: s.rate,
     min: s.min,
     max: s.max,
+    svcId: String(s.apiServiceId),
   }));
   saveServices([...getServices(), ...converted]);
 }
@@ -262,6 +263,13 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
     if (!cloudUser.active) return false;
     ensureUser({ key: k, admin: cloudUser.admin, name: cloudUser.name });
     write(K_SESSION, { key: k, admin: cloudUser.admin, name: name?.trim() || cloudUser.name || "User" });
+    return true;
+  }
+  // Any 4+ character key is accepted (original panel behaviour). This lets a
+  // key generated on one device work on any other device/browser too.
+  if (k.length >= 4) {
+    ensureUser({ key: k, admin: false, name: name?.trim() || "User" });
+    write(K_SESSION, { key: k, admin: false, name: name?.trim() || "User" });
     return true;
   }
   return false;

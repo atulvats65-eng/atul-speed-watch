@@ -47,6 +47,7 @@ export default function Admin() {
   const [sRate, setSRate] = useState(100);
   const [sMin, setSMin] = useState(10);
   const [sMax, setSMax] = useState(100000);
+  const [sSvcId, setSSvcId] = useState("");
 
   const userList = Object.values(users).sort((a, b) => b.createdAt - a.createdAt);
   const revenue = orders.reduce((a, o) => a + o.charge, 0);
@@ -88,9 +89,11 @@ export default function Admin() {
       rate: Number(sRate) || 0,
       min: Math.max(1, Number(sMin) || 1),
       max: Math.max(1, Number(sMax) || 100000),
+      svcId: sSvcId.trim() || undefined,
     });
     setSName("");
     setSCategory("");
+    setSSvcId("");
     toast.success("Service add ho gayi!");
   };
 
@@ -228,11 +231,14 @@ export default function Admin() {
           <Field label="Max qty">
             <Input type="number" value={sMax} onChange={(e) => setSMax(Number(e.target.value))} />
           </Field>
+          <Field label="Service ID (provider, optional)">
+            <Input placeholder="e.g. 228" value={sSvcId} onChange={(e) => setSSvcId(e.target.value)} />
+          </Field>
         </div>
         <Button className="mt-4" onClick={addNewService}>Add service</Button>
 
         <div className="mt-5 overflow-x-auto">
-          <table className="w-full min-w-[560px] text-left text-sm">
+          <table className="w-full min-w-[620px] text-left text-sm">
             <thead>
               <tr className="border-b border-slate-100 text-xs text-slate-400">
                 <th className="pb-2 font-medium">Name</th>
@@ -240,6 +246,7 @@ export default function Admin() {
                 <th className="pb-2 font-medium">Type</th>
                 <th className="pb-2 font-medium">Rate</th>
                 <th className="pb-2 font-medium">Min–Max</th>
+                <th className="pb-2 font-medium">Svc ID</th>
                 <th className="pb-2 font-medium text-right">Action</th>
               </tr>
             </thead>
@@ -251,6 +258,7 @@ export default function Admin() {
                   <td className="py-2 text-slate-500">{s.kind}</td>
                   <td className="py-2">₹{s.rate}</td>
                   <td className="py-2 text-slate-500">{s.min}–{s.max}</td>
+                  <td className="py-2 font-mono text-xs text-slate-500">{s.svcId ?? "—"}</td>
                   <td className="py-2 text-right">
                     <button
                       onClick={() => { removeService(s.id); toast.success("Service delete ho gayi."); }}
@@ -261,7 +269,7 @@ export default function Admin() {
                   </td>
                 </tr>
               ))}
-              {services.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-slate-400">Abhi koi service nahi.</td></tr>}
+              {services.length === 0 && <tr><td colSpan={7} className="py-6 text-center text-slate-400">Abhi koi service nahi.</td></tr>}
             </tbody>
           </table>
         </div>

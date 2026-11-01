@@ -13,6 +13,8 @@ export interface Service {
   rate: number; // ₹ per 1000
   min: number;
   max: number;
+  /** Provider service ID (when imported from an SMM API). */
+  svcId?: string;
 }
 
 // Dashboard: services are user-defined (added manually on the Services page or
