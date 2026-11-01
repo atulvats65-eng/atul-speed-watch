@@ -37,10 +37,10 @@ function paceAt(profile, frac) {
 }
 
 const PROFILES = {
-  safe: { minDrop: 120, maxDrop: 220, minGap: 15, maxGap: 30 },
-  normal: { minDrop: 220, maxDrop: 380, minGap: 15, maxGap: 30 },
-  turbo: { minDrop: 450, maxDrop: 750, minGap: 15, maxGap: 30 },
-  micro: { minDrop: 90, maxDrop: 150, minGap: 15, maxGap: 30 },
+  safe: { minDrop: 50, maxDrop: 100, minGap: 30, maxGap: 45 },
+  normal: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30 },
+  turbo: { minDrop: 200, maxDrop: 350, minGap: 8, maxGap: 15 },
+  micro: { minDrop: 40, maxDrop: 70, minGap: 5, maxGap: 10 },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30 },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4 },
 };

@@ -33,11 +33,11 @@ export interface ProfileParams {
 }
 
 export const PROFILES: Record<Exclude<SpeedProfile, "custom">, ProfileParams> = {
-  // Batch gaps are kept at 15–30 minutes (human-like cadence).
-  safe: { minDrop: 120, maxDrop: 220, minGap: 15, maxGap: 30, label: "Safe" },
-  normal: { minDrop: 220, maxDrop: 380, minGap: 15, maxGap: 30, label: "Normal" },
-  turbo: { minDrop: 450, maxDrop: 750, minGap: 15, maxGap: 30, label: "Turbo" },
-  micro: { minDrop: 90, maxDrop: 150, minGap: 15, maxGap: 30, label: "Micro Fast" },
+  // Original panel timing restored (per-mode gaps & drops).
+  safe: { minDrop: 50, maxDrop: 100, minGap: 30, maxGap: 45, label: "Safe" },
+  normal: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30, label: "Normal" },
+  turbo: { minDrop: 200, maxDrop: 350, minGap: 8, maxGap: 15, label: "Turbo" },
+  micro: { minDrop: 40, maxDrop: 70, minGap: 5, maxGap: 10, label: "Micro Fast" },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30, label: "S-Curve" },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4, label: "Stealth" },
 };
