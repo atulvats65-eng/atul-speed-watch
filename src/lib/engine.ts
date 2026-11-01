@@ -64,6 +64,9 @@ export interface Order {
    *  is scheduled to finish in exactly this time instead of using the profile's
    *  natural pace. */
   durationMs?: number;
+  /** Bot-safe "auto time": picks an unpredictable window and delivers with
+   *  irregular, human-like timing so automation heuristics can't flag it. */
+  autoHuman?: boolean;
 }
 
 export function profileParams(o: Order): ProfileParams {
@@ -291,7 +294,42 @@ function timedSchedule(o: Order): Tick[] {
   return ticks;
 }
 
+// Bot-safe auto scheduling: picks an unpredictable completion window (based on
+// quantity but jittered) and delivers with irregular, human-like spread so the
+// order doesn't look machine-generated. Deterministic (seeded).
+function humanAutoSchedule(o: Order): Tick[] {
+  const q = o.quantity;
+  const baseDur = (q / 1000) * 1.5 * 3600_000;
+  const dur = Math.max(2 * 3600_000, Math.min(18 * 3600_000, baseDur));
+  const n = Math.max(10, Math.min(200, Math.round(q / 120)));
+  const baseAmount = q / n;
+  const rnd = mulberry32(o.createdAt ^ 0xabcdef01);
+  const ticks: Tick[] = [];
+  let cum = 0;
+  for (let i = 1; i <= n; i++) {
+    const f = (rnd() + rnd()) / 2; // bell-ish → more activity mid-window
+    const t = o.createdAt + Math.round(f * dur);
+    let amount = Math.max(1, Math.round(baseAmount * (0.7 + rnd() * 0.6)));
+    if (cum + amount > q) amount = q - cum;
+    if (amount <= 0) break;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({
+      t,
+      amount: drop,
+      likes: Math.round((drop / q) * o.likes),
+      cumulative: Math.min(cum, q),
+    });
+    if (cum >= q) break;
+  }
+  ticks.sort((a, b) => a.t - b.t);
+  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
+  return ticks;
+}
+
 export function schedule(o: Order): Tick[] {
+  if (o.autoHuman) return humanAutoSchedule(o);
   if (o.durationMs) return timedSchedule(o);
   if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);

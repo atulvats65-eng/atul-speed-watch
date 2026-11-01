@@ -23,6 +23,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   const [humanize, setHumanize] = useState(false);
   const [startTime, setStartTime] = useState("");
   const [durationMs, setDurationMs] = useState<number | undefined>(undefined);
+  const [autoHuman, setAutoHuman] = useState(false);
   const [error, setError] = useState("");
 
   const activeCategory = categories.includes(category) ? category : categories[0] ?? "";
@@ -55,6 +56,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     night,
     humanize,
     ...(durationMs ? { durationMs } : {}),
+    ...(autoHuman ? { autoHuman: true } : {}),
   };
 
   if (services.length === 0) {
@@ -99,6 +101,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       night,
       humanize,
       ...(durationMs ? { durationMs } : {}),
+      ...(autoHuman ? { autoHuman: true } : {}),
     };
 
     addOrder(order);
@@ -159,8 +162,21 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
             </Select>
           </Field>
           <Field label="Delivery time (optional — is time mein complete ho)">
-            <Select value={durationMs?.toString() ?? ""} onChange={(e) => setDurationMs(e.target.value ? Number(e.target.value) : undefined)}>
+            <Select
+              value={autoHuman ? "autosafe" : (durationMs?.toString() ?? "")}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "autosafe") {
+                  setAutoHuman(true);
+                  setDurationMs(undefined);
+                } else {
+                  setAutoHuman(false);
+                  setDurationMs(v ? Number(v) : undefined);
+                }
+              }}
+            >
               <option value="">Auto (profile ki speed)</option>
+              <option value="autosafe">Auto (Bot-safe / human-like)</option>
               <option value="3600000">1 hour</option>
               <option value="10800000">3 hours</option>
               <option value="21600000">6 hours</option>

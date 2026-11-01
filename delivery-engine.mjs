@@ -217,7 +217,39 @@ function timedSchedule(o) {
   return ticks;
 }
 
+function humanAutoSchedule(o) {
+  const q = o.quantity;
+  const baseDur = (q / 1000) * 1.5 * 3600_000;
+  const dur = Math.max(2 * 3600_000, Math.min(18 * 3600_000, baseDur));
+  const n = Math.max(10, Math.min(200, Math.round(q / 120)));
+  const baseAmount = q / n;
+  const rnd = mulberry32((o.createdAt || 0) ^ 0xabcdef01);
+  const ticks = [];
+  let cum = 0;
+  for (let i = 1; i <= n; i++) {
+    const f = (rnd() + rnd()) / 2;
+    const t = o.createdAt + Math.round(f * dur);
+    let amount = Math.max(1, Math.round(baseAmount * (0.7 + rnd() * 0.6)));
+    if (cum + amount > q) amount = q - cum;
+    if (amount <= 0) break;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({
+      t,
+      amount: drop,
+      likes: Math.round((drop / q) * (o.likes || 0)),
+      cumulative: Math.min(cum, q),
+    });
+    if (cum >= q) break;
+  }
+  ticks.sort((a, b) => a.t - b.t);
+  if (ticks.length > 0) ticks[ticks.length - 1].cumulative = q;
+  return ticks;
+}
+
 function schedule(o) {
+  if (o.autoHuman) return humanAutoSchedule(o);
   if (o.durationMs) return timedSchedule(o);
   if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);
