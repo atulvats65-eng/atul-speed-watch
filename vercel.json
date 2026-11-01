@@ -6,6 +6,10 @@
       "destination": "/api/smm"
     },
     {
+      "source": "/api/og",
+      "destination": "/api/og"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

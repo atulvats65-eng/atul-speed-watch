@@ -28,6 +28,33 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   // Stable preview timestamp so the preview graph doesn't regenerate (and
   // change) on every re-render — only when settings actually change.
   const previewCreatedAtRef = useRef(Date.now());
+
+  const [linkPreview, setLinkPreview] = useState<{ image?: string; title?: string; desc?: string } | null>(null);
+  const [linkLoading, setLinkLoading] = useState(false);
+
+  // Fetch link thumbnail + title (server-side og: tags) like the original panel.
+  useEffect(() => {
+    if (!/^https:\/\//i.test(link.trim())) {
+      setLinkPreview(null);
+      return;
+    }
+    const t = setTimeout(async () => {
+      setLinkLoading(true);
+      try {
+        const r = await fetch("/api/og", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: link.trim() }),
+        });
+        const d = await r.json();
+        setLinkPreview(d && d.ok ? { image: d.image, title: d.title, desc: d.desc } : null);
+      } catch {
+        setLinkPreview(null);
+      }
+      setLinkLoading(false);
+    }, 600);
+    return () => clearTimeout(t);
+  }, [link]);
   const [error, setError] = useState("");
 
   const activeCategory = categories.includes(category) ? category : categories[0] ?? "";
@@ -139,6 +166,28 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
         <Field label="Link (URL)">
           <Input placeholder="https://instagram.com/p/..." value={link} onChange={(e) => setLink(e.target.value)} />
         </Field>
+
+        {linkLoading && <p className="text-xs text-slate-400">Preview load ho raha hai…</p>}
+        {linkPreview && (linkPreview.image || linkPreview.title) && (
+          <div className="flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 p-3">
+            {linkPreview.image && (
+              <img
+                src={linkPreview.image}
+                alt=""
+                className="size-14 shrink-0 rounded-lg object-cover ring-1 ring-slate-200"
+                onError={(e) => ((e.currentTarget as HTMLImageElement).style.display = "none")}
+              />
+            )}
+            <div className="min-w-0">
+              {linkPreview.title && (
+                <p className="truncate text-sm font-medium text-slate-800">{linkPreview.title}</p>
+              )}
+              {linkPreview.desc && (
+                <p className="truncate text-xs text-slate-500">{linkPreview.desc}</p>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={`Quantity (min ${service.min}, max ${service.max})`}>
