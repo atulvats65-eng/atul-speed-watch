@@ -283,7 +283,11 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
         </div>
 
         <Card className="p-5">
-          <h3 className="mb-2 text-sm font-semibold text-slate-700">Delivery curve preview</h3>
+          <h3 className="mb-2 text-sm font-semibold text-slate-700">
+            Delivery curve preview · {profile}
+            {durationMs ? ` · ${Math.round(durationMs / 3600_000)}h` : ""}
+            {autoHuman ? " · Auto (Bot-safe)" : ""}
+          </h3>
           <DeliveryCurveChart order={previewOrder} now={Date.now()} />
           <p className="mt-2 text-xs text-slate-500">
             Profile ke hisaab se predicted delivery curve. Laal dot = current progress.

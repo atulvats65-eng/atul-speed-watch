@@ -108,7 +108,9 @@ export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: stri
                     <div role="group" aria-label={`Delivery graph for order ${o.id}`} className="min-w-72">
                       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <button onClick={() => onOpenDetail(o.id)} className="font-medium text-slate-900 hover:underline">
-                          #{o.id} · {o.kind} growth
+                          #{o.id} · {o.kind} growth · {o.profile ?? "normal"}
+                          {o.durationMs ? ` · ${Math.round(o.durationMs / 3600_000)}h` : ""}
+                          {o.autoHuman ? " · Auto (Bot-safe)" : ""}
                         </button>
                         <span className="text-slate-500">
                           {p.delivered.toLocaleString("en-IN")} / {o.quantity.toLocaleString("en-IN")}
