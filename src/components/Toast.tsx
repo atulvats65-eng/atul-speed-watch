@@ -10,11 +10,20 @@ interface Msg {
 let seq = 0;
 const listeners = new Set<(m: Msg) => void>();
 
-export function toast(text: string, kind: Kind = "success") {
+type ToastFn = {
+  (text: string, kind?: Kind): void;
+  success: (text: string) => void;
+  error: (text: string) => void;
+};
+
+export const toast = ((text: string, kind: Kind = "success") => {
   seq += 1;
   const m: Msg = { id: seq, text, kind };
   listeners.forEach((l) => l(m));
-}
+}) as ToastFn;
+
+toast.success = (text: string) => toast(text, "success");
+toast.error = (text: string) => toast(text, "error");
 
 export function Toaster() {
   const [items, setItems] = useState<Msg[]>([]);
