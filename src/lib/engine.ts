@@ -207,7 +207,18 @@ function organicSchedule(o: Order): Tick[] {
     }
     const jitter = (rnd() + rnd() + rnd() - 1.5) * 0.08;
     const f = Math.max(0.02, Math.min(0.98, centers[si]! + jitter));
-    const t = o.createdAt + Math.round(f * dur);
+    let t = o.createdAt + Math.round(f * dur);
+
+    // Avoid deep-night pushes: shift to next 7am so activity looks like a human
+    // awake during the day (huge detection signal).
+    if (isNight(t)) {
+      const d = new Date(t + IST);
+      d.setUTCHours(7, 0, 0, 0);
+      let nt = d.getTime() - IST;
+      if (nt <= t) nt += 86_400_000;
+      const f2 = (nt - o.createdAt) / dur;
+      if (f2 > 0 && f2 < 1) t = nt;
+    }
 
     let amount = Math.max(1, Math.round(baseAmount * (0.55 + rnd() * 0.9)));
     if (cum + amount > q) amount = q - cum;
