@@ -210,11 +210,34 @@ export function generateAccessKey(length = 8): string {
   return s;
 }
 
-export function adminCreateUser(name?: string): string {
+export function adminCreateUser(
+  name?: string,
+  opts?: { duration?: string; isAdmin?: boolean; note?: string },
+): string {
   let key = generateAccessKey();
   while (getUsers()[key]) key = generateAccessKey();
-  ensureUser({ key, admin: false, name: name?.trim() || "User" });
+  const duration = opts?.duration || "lifetime";
+  const ms = KEY_DURATION_MS[duration] ?? Infinity;
+  const expiresAt = ms === Infinity ? undefined : Date.now() + ms;
+  const all = getUsers();
+  all[key] = {
+    key,
+    name: name?.trim() || opts?.note?.trim() || "User",
+    admin: !!opts?.isAdmin,
+    active: true,
+    createdAt: Date.now(),
+    duration,
+    expiresAt,
+    note: opts?.note?.trim() || undefined,
+  };
+  writeUsers(all);
   return key;
+}
+
+export function adminDeleteUser(key: string) {
+  const all = getUsers();
+  delete all[key];
+  writeUsers(all);
 }
 
 export async function signIn(key: string, name?: string): Promise<boolean> {
@@ -229,7 +252,8 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
   const localUser = getUsers()[k];
   if (localUser) {
     if (!localUser.active) return false;
-    write(K_SESSION, { key: k, admin: false, name: name?.trim() || localUser.name || "User" });
+    if (isKeyExpired(localUser)) return false;
+    write(K_SESSION, { key: k, admin: !!localUser.admin, name: name?.trim() || localUser.name || "User" });
     return true;
   }
   // fall back to cloud registry
@@ -269,6 +293,20 @@ export interface PanelUser {
   admin: boolean;
   active: boolean;
   createdAt: number;
+  duration?: string;
+  expiresAt?: number;
+  note?: string;
+}
+
+export const KEY_DURATION_MS: Record<string, number> = {
+  "1d": 86_400_000,
+  "7d": 7 * 86_400_000,
+  "30d": 30 * 86_400_000,
+  lifetime: Infinity,
+};
+
+export function isKeyExpired(u: PanelUser): boolean {
+  return typeof u.expiresAt === "number" && Date.now() > u.expiresAt;
 }
 
 const K_USERS = "atul_users";
