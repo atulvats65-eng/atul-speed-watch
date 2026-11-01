@@ -1,0 +1,19 @@
+{
+  "name": "ATUL Speed Watch",
+  "short_name": "ATUL",
+  "description": "Social media delivery panel",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#04070a",
+  "theme_color": "#04070a",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
