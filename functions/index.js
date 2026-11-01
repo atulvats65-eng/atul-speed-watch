@@ -73,3 +73,48 @@ exports.status = onRequest(async (req, res) => {
   }
   res.json({ total: snap.size, pending, completed });
 });
+
+// SMM API proxy — mirrors server.mjs / vite-proxy. Firebase Hosting rewrites
+// POST /api/smm here, so the browser never talks to the SMM provider directly
+// (which blocks CORS). Sends browser-like headers to avoid Cloudflare bot blocks.
+exports.smmProxy = onRequest({ cors: true }, async (req, res) => {
+  if (req.method !== "POST") {
+    res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+  const target = String(req.headers["x-target"] || "").trim();
+  if (!target) {
+    res.status(400).json({ error: "X-Target header missing" });
+    return;
+  }
+
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks).toString("utf8");
+
+  try {
+    const upstream = await fetch(target, {
+      method: "POST",
+      headers: {
+        "Content-Type": (req.headers["content-type"] || "application/x-www-form-urlencoded").toString(),
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        Accept: "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      body,
+    });
+    const text = await upstream.text();
+    res.status(upstream.status).json(parseSafe(text));
+  } catch (e) {
+    res.status(502).json({ error: "Proxy upstream error: " + (e instanceof Error ? e.message : String(e)) });
+  }
+});
+
+function parseSafe(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text.slice(0, 300) };
+  }
+}

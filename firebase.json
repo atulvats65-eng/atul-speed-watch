@@ -8,6 +8,10 @@
     ],
     "rewrites": [
       {
+        "source": "/api/smm",
+        "function": "smmProxy"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
