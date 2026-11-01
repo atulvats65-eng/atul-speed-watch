@@ -38,16 +38,61 @@ export default async function handler(req, res) {
     });
     const html = await upstream.text();
 
-    const pick = (prop) => {
-      const m =
-        html.match(new RegExp(`<meta[^>]+property=["']og:${prop}["'][^>]+content=["']([^"']+)["']`, "i")) ??
-        html.match(new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, "i"));
-      return m ? m[1] : "";
+    const unescape = (s) => {
+      try {
+        return s
+          .replace(/&amp;/g, "&")
+          .replace(/&quot;/g, '"')
+          .replace(/&#39;/g, "'")
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">");
+      } catch {
+        return s;
+      }
     };
 
-    const image = pick("image");
-    const title = pick("title");
+    const pick = (prop) => {
+      const pats = [
+        new RegExp(`<meta[^>]+property=["']og:${prop}["'][^>]+content=["']([^"']+)["']`, "i"),
+        new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:${prop}["']`, "i"),
+      ];
+      for (const p of pats) {
+        const m = html.match(p);
+        if (m && m[1]) return unescape(m[1]);
+      }
+      return "";
+    };
+
+    let image = pick("image");
+
+    // Twitter / alternate image tags fallback
+    if (!image) {
+      const tw =
+        html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i) ??
+        html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']twitter:image["']/i);
+      image = tw ? unescape(tw[1]) : "";
+    }
+    if (!image) {
+      const ls = html.match(/<link[^>]+rel=["']image_src["'][^>]+href=["']([^"']+)["']/i);
+      image = ls ? unescape(ls[1]) : "";
+    }
+    if (!image) {
+      const ls2 = html.match(/<link[^>]+href=["']([^"']+)["'][^>]+rel=["']image_src["']/i);
+      image = ls2 ? unescape(ls2[1]) : "";
+    }
+
+    let title = pick("title");
+    if (!title) {
+      const twt = html.match(/<meta[^>]+name=["']twitter:title["'][^>]+content=["']([^"']+)["']/i);
+      title = twt ? unescape(twt[1]) : "";
+    }
+    if (!title) {
+      const t = html.match(/<title[^>]*>([^<]*)<\/title>/i);
+      title = t ? unescape(t[1]).trim() : "";
+    }
+
     const desc = pick("description");
+
     if (!image && !title) {
       res.status(200).json({ ok: false, error: "Preview nahi mila (private/login-required?)" });
       return;
