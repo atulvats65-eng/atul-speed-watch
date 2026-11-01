@@ -22,6 +22,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   const [night, setNight] = useState<NightMode>("none");
   const [humanize, setHumanize] = useState(false);
   const [startTime, setStartTime] = useState("");
+  const [durationMs, setDurationMs] = useState<number | undefined>(undefined);
   const [error, setError] = useState("");
 
   const activeCategory = categories.includes(category) ? category : categories[0] ?? "";
@@ -53,6 +54,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     ...(profile === "custom" ? { cMinDrop, cMaxDrop, cMinGap, cMaxGap } : {}),
     night,
     humanize,
+    ...(durationMs ? { durationMs } : {}),
   };
 
   if (services.length === 0) {
@@ -96,6 +98,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
         : {}),
       night,
       humanize,
+      ...(durationMs ? { durationMs } : {}),
     };
 
     addOrder(order);
@@ -155,14 +158,25 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
               <option value="custom">Custom</option>
             </Select>
           </Field>
-          <Field label="Night mode (12AM–6AM)">
-            <Select value={night} onChange={(e) => setNight(e.target.value as NightMode)}>
-              <option value="none">None</option>
-              <option value="pause">Pause</option>
-              <option value="slow">Slow down</option>
+          <Field label="Delivery time (optional — is time mein complete ho)">
+            <Select value={durationMs?.toString() ?? ""} onChange={(e) => setDurationMs(e.target.value ? Number(e.target.value) : undefined)}>
+              <option value="">Auto (profile ki speed)</option>
+              <option value="3600000">1 hour</option>
+              <option value="10800000">3 hours</option>
+              <option value="21600000">6 hours</option>
+              <option value="43200000">12 hours</option>
+              <option value="86400000">24 hours</option>
             </Select>
           </Field>
         </div>
+
+        <Field label="Night mode (12AM–6AM)">
+          <Select value={night} onChange={(e) => setNight(e.target.value as NightMode)}>
+            <option value="none">None</option>
+            <option value="pause">Pause</option>
+            <option value="slow">Slow down</option>
+          </Select>
+        </Field>
 
         <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-slate-50 p-4">
           <span>

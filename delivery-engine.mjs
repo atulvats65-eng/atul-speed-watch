@@ -37,10 +37,10 @@ function paceAt(profile, frac) {
 }
 
 const PROFILES = {
-  safe: { minDrop: 50, maxDrop: 100, minGap: 30, maxGap: 45 },
-  normal: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30 },
-  turbo: { minDrop: 200, maxDrop: 350, minGap: 8, maxGap: 15 },
-  micro: { minDrop: 40, maxDrop: 70, minGap: 5, maxGap: 10 },
+  safe: { minDrop: 120, maxDrop: 220, minGap: 12, maxGap: 20 },
+  normal: { minDrop: 220, maxDrop: 380, minGap: 6, maxGap: 12 },
+  turbo: { minDrop: 450, maxDrop: 750, minGap: 3, maxGap: 6 },
+  micro: { minDrop: 90, maxDrop: 150, minGap: 2, maxGap: 4 },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30 },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4 },
 };
@@ -61,8 +61,8 @@ function profileParams(o) {
   return PROFILES[o.profile] || PROFILES.normal;
 }
 
-const SCURVE_PER_1000 = 30 * 60_000;
-const SCURVE_MIN = 15 * 60_000;
+const SCURVE_PER_1000 = 15 * 60_000;
+const SCURVE_MIN = 8 * 60_000;
 const SCURVE_MAX = 6 * 3600_000;
 const SCURVE_STEEP = 12;
 
@@ -99,8 +99,8 @@ function sCurveSchedule(o) {
   return ticks;
 }
 
-const STEALTH_PER_1000 = 40 * 60_000;
-const STEALTH_MIN = 20 * 60_000;
+const STEALTH_PER_1000 = 20 * 60_000;
+const STEALTH_MIN = 10 * 60_000;
 const STEALTH_MAX = 8 * 3600_000;
 
 function mulberry32(a) {
@@ -186,7 +186,39 @@ function stealthSchedule(o) {
   return ticks;
 }
 
+function timedSchedule(o) {
+  const q = o.quantity;
+  const dur = Math.max(60_000, o.durationMs || 3600_000);
+  const n = Math.max(8, Math.min(240, Math.round(q / 150)));
+  const baseAmount = Math.floor(q / n);
+  const rnd = mulberry32((o.createdAt || 0) ^ (o.durationMs || 0) ^ 0x9e3779b9);
+  const ticks = [];
+  let cum = 0;
+  for (let i = 1; i <= n; i++) {
+    const x = i / n;
+    const t = o.createdAt + Math.round(x * dur);
+    let amount = baseAmount;
+    if (i === n || cum + baseAmount >= q) amount = q - cum;
+    if (amount <= 0) break;
+    amount = Math.max(1, Math.round(amount * (0.85 + rnd() * 0.3)));
+    if (cum + amount > q) amount = q - cum;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({
+      t,
+      amount: drop,
+      likes: Math.round((drop / q) * (o.likes || 0)),
+      cumulative: Math.min(cum, q),
+    });
+    if (cum >= q) break;
+  }
+  if (ticks.length > 0) ticks[ticks.length - 1].cumulative = q;
+  return ticks;
+}
+
 function schedule(o) {
+  if (o.durationMs) return timedSchedule(o);
   if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);
   const p = profileParams(o);

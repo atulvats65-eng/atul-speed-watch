@@ -31,10 +31,12 @@ export interface ProfileParams {
 }
 
 export const PROFILES: Record<Exclude<SpeedProfile, "custom">, ProfileParams> = {
-  safe: { minDrop: 50, maxDrop: 100, minGap: 30, maxGap: 45, label: "Safe" },
-  normal: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30, label: "Normal" },
-  turbo: { minDrop: 200, maxDrop: 350, minGap: 8, maxGap: 15, label: "Turbo" },
-  micro: { minDrop: 40, maxDrop: 70, minGap: 5, maxGap: 10, label: "Micro Fast" },
+  // Speeds tuned ~2x faster so orders complete in roughly half the time and
+  // never feel stalled.
+  safe: { minDrop: 120, maxDrop: 220, minGap: 12, maxGap: 20, label: "Safe" },
+  normal: { minDrop: 220, maxDrop: 380, minGap: 6, maxGap: 12, label: "Normal" },
+  turbo: { minDrop: 450, maxDrop: 750, minGap: 3, maxGap: 6, label: "Turbo" },
+  micro: { minDrop: 90, maxDrop: 150, minGap: 2, maxGap: 4, label: "Micro Fast" },
   scurve: { minDrop: 100, maxDrop: 170, minGap: 15, maxGap: 30, label: "S-Curve" },
   stealth: { minDrop: 6, maxDrop: 12, minGap: 1, maxGap: 4, label: "Stealth" },
 };
@@ -58,6 +60,10 @@ export interface Order {
   night?: NightMode;
   humanize?: boolean;
   cancelled?: boolean;
+  /** Optional fixed completion window (ms from createdAt). When set, the order
+   *  is scheduled to finish in exactly this time instead of using the profile's
+   *  natural pace. */
+  durationMs?: number;
 }
 
 export function profileParams(o: Order): ProfileParams {
@@ -71,8 +77,8 @@ export function profileParams(o: Order): ProfileParams {
   return PROFILES[o.profile ?? "normal"];
 }
 
-const SCURVE_PER_1000 = 30 * 60_000; // ~30 min per 1000 units
-const SCURVE_MIN = 15 * 60_000; // minimum 15 min
+const SCURVE_PER_1000 = 15 * 60_000; // ~15 min per 1000 units (2x faster)
+const SCURVE_MIN = 8 * 60_000; // minimum 8 min
 const SCURVE_MAX = 6 * 3600_000; // cap at 6 hours
 const SCURVE_STEEP = 12;
 
@@ -143,8 +149,8 @@ function sCurveSchedule(o: Order): Tick[] {
   return ticks;
 }
 
-const STEALTH_PER_1000 = 40 * 60_000; // ~40 min per 1000 units
-const STEALTH_MIN = 20 * 60_000;
+const STEALTH_PER_1000 = 20 * 60_000; // ~20 min per 1000 units (2x faster)
+const STEALTH_MIN = 10 * 60_000;
 const STEALTH_MAX = 8 * 3600_000;
 
 // Deterministic PRNG (mulberry32) so the same order always produces the same
@@ -251,7 +257,42 @@ function isNight(t: number): boolean {
   return h >= 0 && h < 6;
 }
 
+// Fixed-duration schedule: delivers the whole quantity evenly across the chosen
+// completion window so the order finishes in exactly that time and never stalls.
+// Deterministic (seeded) so progress is stable across re-renders.
+function timedSchedule(o: Order): Tick[] {
+  const q = o.quantity;
+  const dur = Math.max(60_000, o.durationMs ?? 3600_000);
+  const n = Math.max(8, Math.min(240, Math.round(q / 150)));
+  const baseAmount = Math.floor(q / n);
+  const rnd = mulberry32(o.createdAt ^ (o.durationMs ?? 0) ^ 0x9e3779b9);
+  const ticks: Tick[] = [];
+  let cum = 0;
+  for (let i = 1; i <= n; i++) {
+    const x = i / n;
+    const t = o.createdAt + Math.round(x * dur);
+    let amount = baseAmount;
+    if (i === n || cum + baseAmount >= q) amount = q - cum;
+    if (amount <= 0) break;
+    amount = Math.max(1, Math.round(amount * (0.85 + rnd() * 0.3)));
+    if (cum + amount > q) amount = q - cum;
+    cum += amount;
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    const drop = Math.max(1, Math.round(amount * nightSlow));
+    ticks.push({
+      t,
+      amount: drop,
+      likes: Math.round((drop / q) * o.likes),
+      cumulative: Math.min(cum, q),
+    });
+    if (cum >= q) break;
+  }
+  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
+  return ticks;
+}
+
 export function schedule(o: Order): Tick[] {
+  if (o.durationMs) return timedSchedule(o);
   if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);
   const p = profileParams(o);
