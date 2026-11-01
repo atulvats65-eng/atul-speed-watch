@@ -23,6 +23,14 @@ function fmtTime(t: number) {
   });
 }
 
+function fmtRemaining(eta: number, now: number) {
+  const ms = eta - now;
+  if (ms <= 0) return "abhi";
+  const m = Math.floor(ms / 60000);
+  if (m >= 60) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${m}m`;
+}
+
 const filters: ("all" | Status)[] = ["all", "pending", "in progress", "completed", "cancelled"];
 
 export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: string) => void }) {
@@ -105,6 +113,7 @@ export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: stri
                         <span className="text-slate-500">
                           {p.delivered.toLocaleString("en-IN")} / {o.quantity.toLocaleString("en-IN")}
                           {o.likes > 0 ? ` · ${p.likes.toLocaleString("en-IN")} / ${o.likes.toLocaleString("en-IN")} likes` : ""}
+                          {" · "}{p.status === "completed" ? "Complete ✓" : p.status === "cancelled" ? "Cancelled" : `completes ${fmtRemaining(p.eta, now)}`}
                         </span>
                       </div>
                       <GrowthChart ticks={p.ticks} now={now} showLikes={o.likes > 0} height={180} />
