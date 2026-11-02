@@ -41,9 +41,11 @@ export function GrowthChart({ ticks, now, showLikes, height = 260 }: { ticks: Ti
   const px = (x: number) => L + x * iw;
   const py = (y: number) => T + (1 - y) * ih;
 
-  const toPoints = (get: (d: Pt) => number | null) => {
-    let prev: number | null = null;
+  const toPoints = (get: (d: Pt) => number | null, startAtZero: boolean) => {
     const pts: { x: number; y: number }[] = [];
+    // Origin (0,0) — cumulative lines always start from the bottom-left.
+    if (startAtZero) pts.push({ x: px(0), y: py(0) });
+    let prev: number | null = 0;
     data.forEach((d) => {
       const v = get(d) ?? prev;
       prev = v;
@@ -53,31 +55,56 @@ export function GrowthChart({ ticks, now, showLikes, height = 260 }: { ticks: Ti
     return pts;
   };
 
-  // Catmull-Rom → cubic bezier smoothing for an organic, IG-style curve.
+  // Monotone cubic interpolation — smooth, but never overshoots (no "goat" /
+  // wiggly bends). This keeps S-curve a true sigmoid and all lines clean.
   const smoothPath = (pts: { x: number; y: number }[]) => {
-    if (pts.length === 0) return "";
-    if (pts.length === 1) return `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
+    const n = pts.length;
+    if (n === 0) return "";
+    if (n === 1) return `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
     let d = `M${pts[0]!.x.toFixed(1)},${pts[0]!.y.toFixed(1)}`;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const p0 = pts[i - 1] ?? pts[i]!;
-      const p1 = pts[i]!;
-      const p2 = pts[i + 1]!;
-      const p3 = pts[i + 2] ?? p2;
-      const c1x = p1.x + (p2.x - p0.x) / 6;
-      const c1y = p1.y + (p2.y - p0.y) / 6;
-      const c2x = p2.x - (p3.x - p1.x) / 6;
-      const c2y = p2.y - (p3.y - p1.y) / 6;
-      d += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+
+    const slopes: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const dx = pts[i + 1]!.x - pts[i]!.x;
+      const dy = pts[i + 1]!.y - pts[i]!.y;
+      slopes.push(dx !== 0 ? dy / dx : 0);
+    }
+
+    const tangents: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (i === 0) {
+        tangents.push(slopes[0] ?? 0);
+      } else if (i === n - 1) {
+        tangents.push(slopes[n - 2] ?? 0);
+      } else {
+        const a = slopes[i - 1] ?? 0;
+        const b = slopes[i] ?? 0;
+        if (a * b <= 0) tangents.push(0);
+        else tangents.push((a + b) / 2);
+      }
+    }
+
+    for (let i = 0; i < n - 1; i++) {
+      const p0 = pts[i]!;
+      const p1 = pts[i + 1]!;
+      const m0 = tangents[i]!;
+      const m1 = tangents[i + 1]!;
+      const dx = p1.x - p0.x;
+      const c1x = p0.x + dx / 3;
+      const c1y = p0.y + (m0 * dx) / 3;
+      const c2x = p0.x + (2 * dx) / 3;
+      const c2y = p1.y - (m1 * dx) / 3;
+      d += `C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
     }
     return d;
   };
 
-  const planned = smoothPath(toPoints((d) => d.planned));
-  const delivered = smoothPath(toPoints((d) => d.delivered));
-  const likesLine = showLikes ? smoothPath(toPoints((d) => d.likes)) : "";
+  const planned = smoothPath(toPoints((d) => d.planned, true));
+  const delivered = smoothPath(toPoints((d) => d.delivered, true));
+  const likesLine = showLikes ? smoothPath(toPoints((d) => d.likes, true)) : "";
 
   // area path under delivered (smoothed)
-  const deliveredPts = toPoints((d) => d.delivered);
+  const deliveredPts = toPoints((d) => d.delivered, true);
   let area = "";
   if (deliveredPts.length > 0) {
     area = `M${deliveredPts[0]!.x.toFixed(1)},${py(0).toFixed(1)} ` + smoothPath(deliveredPts);
