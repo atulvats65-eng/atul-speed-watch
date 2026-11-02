@@ -277,13 +277,8 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
     write(K_SESSION, { key: k, admin: cloudUser.admin, name: name?.trim() || cloudUser.name || "User" });
     return true;
   }
-  // Any 4+ character key opens a panel (original behaviour). Each key gets its
-  // own isolated data namespace, so whoever you hand a key to gets their own panel.
-  if (k.length >= 4) {
-    ensureUser({ key: k, admin: false, name: name?.trim() || "User" });
-    write(K_SESSION, { key: k, admin: false, name: name?.trim() || "User" });
-    return true;
-  }
+  // Only verified (admin-registered) keys open a panel. Each key has its own
+  // isolated data. Use Gmail login if you don't have a verified key.
   return false;
 }
 
