@@ -191,7 +191,10 @@ function organicSchedule(o: Order): Tick[] {
   const lastC = centers[centers.length - 1]! || 1;
   for (let s = 0; s < centers.length; s++) centers[s] = centers[s]! / (lastC * 1.15);
 
-  const n = Math.max(12, Math.min(300, Math.round(q / 60)));
+  // Bound batches so they fit inside the window with a 15-min min gap AND keep
+  // each batch >= 100 — prevents stall while keeping human cadence.
+  const maxFit = Math.max(1, Math.floor(dur / (18 * 60_000)));
+  const n = Math.max(1, Math.min(maxFit, Math.round(q / 120)));
   const baseAmount = q / n;
   const ticks: Tick[] = [];
   let cum = 0;
@@ -231,7 +234,8 @@ function organicSchedule(o: Order): Tick[] {
     if (amount <= 0) break;
     cum += amount;
     const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
-    const drop = Math.max(1, Math.round(amount * nightSlow));
+    // Human-like batches stay >= 100 (when the order is big enough) — no tiny drops.
+    const drop = Math.min(MAX_DROP, Math.max(q >= 100 ? FLOOR_STEALTH : 1, Math.round(amount * nightSlow)));
     ticks.push({ t, amount: drop, likes: Math.round((drop / q) * o.likes), cumulative: Math.min(cum, q) });
     if (cum >= q) break;
   }
