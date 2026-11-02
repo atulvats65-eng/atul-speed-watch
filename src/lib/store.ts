@@ -13,8 +13,17 @@ import {
 } from "./cloud";
 import { remotePushOrder, remoteRemoveOrder } from "./remote";
 
-const K_ORDERS = "atul_orders";
 const EVT = "atul-store";
+
+// Namespace every user-data key by the current session key, so each access key
+// sees only its own orders / services / API config (per-key isolation).
+function nsKey(base: string): string {
+  const s = read<Session | null>(K_SESSION, null);
+  return s && s.key ? `${base}:${s.key}` : base;
+}
+
+const K_ORDERS_BASE = "atul_orders";
+const K_ORDERS = () => nsKey(K_ORDERS_BASE);
 
 function read<T>(k: string, fallback: T): T {
   try {
@@ -56,14 +65,15 @@ function useStored<T>(k: string, fallback: T): T {
 }
 
 const EMPTY: never[] = [];
-export const useOrders = () => useStored<Order[]>(K_ORDERS, EMPTY);
-export const getOrders = () => read<Order[]>(K_ORDERS, []);
+export const useOrders = () => useStored<Order[]>(K_ORDERS(), EMPTY);
+export const getOrders = () => read<Order[]>(K_ORDERS(), []);
 export function setOrders(orders: Order[]) {
-  write(K_ORDERS, orders);
+  write(K_ORDERS(), orders);
 }
 export function addOrder(o: Order) {
   const s = read<Session | null>(K_SESSION, null);
   const order = s && !o.userKey ? { ...o, userKey: s.key } : o;
+  void s;
   const next = [order, ...getOrders()];
   setOrders(next);
   if (isFirebaseReady()) cloudPushOrders(next);
@@ -104,12 +114,13 @@ export interface ApiCfg {
   backupKey: string;
 }
 
-const K_API_CFG = "atul_api_cfg";
+const K_API_CFG_BASE = "atul_api_cfg";
+const K_API_CFG = () => nsKey(K_API_CFG_BASE);
 const EMPTY_API: ApiCfg = { url: "", key: "", backupUrl: "", backupKey: "" };
-export const useApiCfg = () => useStored<ApiCfg>(K_API_CFG, EMPTY_API);
-export const getApiCfg = () => read<ApiCfg>(K_API_CFG, EMPTY_API);
+export const useApiCfg = () => useStored<ApiCfg>(K_API_CFG(), EMPTY_API);
+export const getApiCfg = () => read<ApiCfg>(K_API_CFG(), EMPTY_API);
 export function saveApiCfg(cfg: ApiCfg) {
-  write(K_API_CFG, cfg);
+  write(K_API_CFG(), cfg);
   if (isFirebaseReady()) cloudWriteApiCfg(cfg);
 }
 
@@ -124,7 +135,8 @@ export interface ApiService {
   max: number;
 }
 
-const K_SERVICES = "atul_services";
+const K_SERVICES_BASE = "atul_services";
+const K_SERVICES = () => nsKey(K_SERVICES_BASE);
 const K_API_SERVICES_LEGACY = "atul_api_services";
 
 // One-time lift of old API-imported services (was `atul_api_services`) into the
@@ -144,26 +156,26 @@ function migrateLegacyServices(): Service[] {
       min: s.min,
       max: s.max,
     }));
-    const cur = read<Service[]>(K_SERVICES, []);
+    const cur = read<Service[]>(K_SERVICES(), []);
     const byId = new Map(cur.map((s) => [s.id, s]));
     for (const s of migrated) byId.set(s.id, s);
     const merged = Array.from(byId.values());
-    write(K_SERVICES, merged);
+    write(K_SERVICES(), merged);
     localStorage.removeItem(K_API_SERVICES_LEGACY);
     return merged;
   } catch {
-    return read<Service[]>(K_SERVICES, []);
+    return read<Service[]>(K_SERVICES(), []);
   }
 }
 
-export const useServices = () => useStored<Service[]>(K_SERVICES, EMPTY);
+export const useServices = () => useStored<Service[]>(K_SERVICES(), EMPTY);
 export const getServices = () => {
-  const cur = read<Service[]>(K_SERVICES, []);
+  const cur = read<Service[]>(K_SERVICES(), []);
   if (cur.length > 0) return cur;
   return migrateLegacyServices();
 };
 export function saveServices(list: Service[]) {
-  write(K_SERVICES, list);
+  write(K_SERVICES(), list);
 }
 export function addService(s: Service) {
   saveServices([...getServices().filter((x) => x.id !== s.id), s]);
@@ -189,7 +201,7 @@ export function saveApiServices(list: ApiService[]) {
   }));
   saveServices([...getServices(), ...converted]);
 }
-export const useApiServices = () => useStored<Service[]>(K_SERVICES, EMPTY);
+export const useApiServices = () => useStored<Service[]>(K_SERVICES(), EMPTY);
 export const getApiServices = () => getServices();
 
 /* ---- session ---- */
@@ -265,13 +277,7 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
     write(K_SESSION, { key: k, admin: cloudUser.admin, name: name?.trim() || cloudUser.name || "User" });
     return true;
   }
-  // Any 4+ character key is accepted (original panel behaviour). This lets a
-  // key generated on one device work on any other device/browser too.
-  if (k.length >= 4) {
-    ensureUser({ key: k, admin: false, name: name?.trim() || "User" });
-    write(K_SESSION, { key: k, admin: false, name: name?.trim() || "User" });
-    return true;
-  }
+  // Only admin-issued keys are accepted (no arbitrary 4+ char keys).
   return false;
 }
 
@@ -365,13 +371,14 @@ export interface Tx {
   at: number;
 }
 
-const K_TX = "atul_tx";
-export const useTx = () => useStored<Tx[]>(K_TX, EMPTY);
-export const getTx = () => read<Tx[]>(K_TX, []);
+const K_TX_BASE = "atul_tx";
+const K_TX = () => nsKey(K_TX_BASE);
+export const useTx = () => useStored<Tx[]>(K_TX(), EMPTY);
+export const getTx = () => read<Tx[]>(K_TX(), []);
 
 export function addTx(t: Tx) {
   const next = [t, ...getTx()];
-  write(K_TX, next);
+  write(K_TX(), next);
   if (isFirebaseReady()) cloudWriteTx(next);
 }
 
@@ -384,7 +391,7 @@ export function applyCloudOrders(cloud: Order[]) {
   const byId = new Map(local.map((o) => [o.id, o]));
   for (const o of cloud) byId.set(o.id, o);
   const merged = Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
-  write(K_ORDERS, merged);
+  write(K_ORDERS(), merged);
 }
 
 export function applyCloudUsers(cloud: Record<string, PanelUser>) {
@@ -395,9 +402,9 @@ export function applyCloudUsers(cloud: Record<string, PanelUser>) {
 }
 
 export function applyCloudApiCfg(cloud: ApiCfg) {
-  if (cloud && cloud.url) write(K_API_CFG, cloud);
+  if (cloud && cloud.url) write(K_API_CFG(), cloud);
 }
 
 export function applyCloudTx(cloud: Tx[]) {
-  if (Array.isArray(cloud)) write(K_TX, cloud);
+  if (Array.isArray(cloud)) write(K_TX(), cloud);
 }
