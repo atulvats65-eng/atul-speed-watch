@@ -32,7 +32,7 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
   if (!o) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-        Order nahi mila. <button onClick={onBack} className="text-slate-900 underline">Order history</button>
+        Order not found. <button onClick={onBack} className="text-slate-900 underline">Order history</button>
       </div>
     );
   }
@@ -52,6 +52,7 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
     ["Expected complete", fmtTime(p.eta)],
     ["Total drops", `${p.done.length} / ${p.ticks.length}`],
     ["Next drop", p.next ? `${p.next.amount} units · ${fmtIn(p.next.t - now)}` : "—"],
+    ["Cancel", o.cancelled ? "Yes" : "No"],
   ];
 
   return (
@@ -61,12 +62,12 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
         <h1 className="text-lg font-semibold text-slate-800">Order #{o.id}</h1>
         <StatusBadge status={p.status} />
         <div className="ml-auto flex gap-2">
-          {p.status === "in progress" && (
+          {!o.cancelled && p.status !== "completed" && (
             <Button className="bg-slate-200 text-xs text-slate-800 hover:bg-slate-300" onClick={() => updateOrder(o.id, { cancelled: true })}>
-              Cancel
+              Cancel Order
             </Button>
           )}
-          <Button className="bg-red-100 text-xs text-red-600 hover:bg-red-200" onClick={() => { deleteOrder(o.id); onBack(); }}>
+          <Button className="bg-red-100 text-xs text-red-600 hover:bg-red-200" onClick={() => { if (confirm("Delete this order?")) { deleteOrder(o.id); onBack(); } }}>
             Delete
           </Button>
         </div>

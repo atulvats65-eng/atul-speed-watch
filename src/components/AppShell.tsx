@@ -8,7 +8,7 @@ export type View = "dashboard" | "new-order" | "orders" | "order-detail" | "serv
 
 const NAV: { id: View; label: string; adminOnly?: boolean }[] = [
   { id: "dashboard", label: "Dashboard" },
-  { id: "new-order", label: "Naya Order" },
+  { id: "new-order", label: "New Order" },
   { id: "orders", label: "Orders" },
   { id: "services", label: "Services" },
   { id: "smm-api", label: "SMM API" },

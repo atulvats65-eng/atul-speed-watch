@@ -93,11 +93,11 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   if (services.length === 0) {
     return (
       <div className="mx-auto max-w-3xl space-y-4">
-        <h1 className="text-2xl font-bold">Naya Order</h1>
+        <h1 className="text-2xl font-bold">New Order</h1>
         <Card className="space-y-3 p-6 text-center">
-          <p className="text-sm text-slate-600">Abhi koi service nahi hai.</p>
+          <p className="text-sm text-slate-600">No services yet.</p>
           <p className="text-xs text-slate-500">
-            Pehle <strong>Services</strong> page se ek service add karein (ya SMM API se import karein), phir yahan order place karein.
+            Add a service from <strong>Services</strong> (or import via SMM API), then place an order here.
           </p>
         </Card>
       </div>
@@ -105,13 +105,13 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   }
 
   const submit = () => {
-    if (!service) return setError("Pehle ek service select karein.");
-    if (!link.trim()) return setError("Link daaliye.");
+    if (!service) return setError("Select a service first.");
+    if (!link.trim()) return setError("Enter a link.");
     const q = Number(quantity);
-    if (!q || q < service.min) return setError(`Minimum quantity ${service.min} hai.`);
-    if (q > service.max) return setError(`Maximum quantity ${service.max} hai.`);
+    if (!q || q < service.min) return setError(`Minimum quantity is ${service.min}.`);
+    if (q > service.max) return setError(`Maximum quantity is ${service.max}.`);
     if (profile === "custom" && (cMaxDrop < cMinDrop || cMaxGap < cMinGap))
-      return setError("Custom drop/gap values sahi nahi hain.");
+      return setError("Custom drop/gap values are invalid.");
 
     const createdAt = startTime ? new Date(startTime).getTime() : Date.now();
     if (Number.isNaN(createdAt)) return setError("Start time sahi nahi hai.");
@@ -295,7 +295,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
         </Card>
 
         {error && <p className="text-sm text-red-600">{error}</p>}
-        <Button onClick={submit} className="w-full">Order place karen</Button>
+        <Button onClick={submit} className="w-full">Place Order</Button>
       </Card>
     </div>
   );
