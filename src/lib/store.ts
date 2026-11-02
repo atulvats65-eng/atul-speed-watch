@@ -277,7 +277,13 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
     write(K_SESSION, { key: k, admin: cloudUser.admin, name: name?.trim() || cloudUser.name || "User" });
     return true;
   }
-  // Only admin-issued keys are accepted (no arbitrary 4+ char keys).
+  // Any 4+ character key opens a panel (original behaviour). Each key gets its
+  // own isolated data namespace, so whoever you hand a key to gets their own panel.
+  if (k.length >= 4) {
+    ensureUser({ key: k, admin: false, name: name?.trim() || "User" });
+    write(K_SESSION, { key: k, admin: false, name: name?.trim() || "User" });
+    return true;
+  }
   return false;
 }
 
