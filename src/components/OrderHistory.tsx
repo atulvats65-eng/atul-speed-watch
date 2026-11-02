@@ -1,9 +1,62 @@
 import { Fragment, useEffect, useState } from "react";
-import { progress } from "../lib/engine";
+import { progress, schedule } from "../lib/engine";
 import type { Order, Status } from "../lib/engine";
 import { useOrders } from "../lib/store";
 import StatusBadge from "./StatusBadge";
 import { GrowthChart } from "./DeliveryCharts";
+
+// Per-order schedule plan (original panel style): next drop + drop-by-drop list.
+function OrderPlan({ o, now }: { o: Order; now: number }) {
+  const ticks = schedule(o);
+  if (ticks.length === 0) {
+    return <p className="mt-2 text-xs text-slate-400">No schedule data yet.</p>;
+  }
+  const next = ticks.find((k) => k.t > now);
+  const shown = ticks.slice(-200);
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs">
+      {next && (
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-900 px-3 py-2 text-white">
+          <span className="text-slate-300">Next drop</span>
+          <span className="font-semibold">
+            {next.amount.toLocaleString("en-IN")} units · {fmtRemaining(next.t, now)} from now
+          </span>
+        </div>
+      )}
+      <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1 font-medium text-slate-600">
+        <span>Total drops: {ticks.length}</span>
+        <span>Qty: {o.quantity.toLocaleString("en-IN")}</span>
+        <span>Mode: {o.profile ?? "normal"}</span>
+        {o.durationMs ? <span>· {Math.round(o.durationMs / 3600_000)}h window</span> : null}
+        {o.autoHuman ? <span>· Auto (Bot-safe)</span> : null}
+      </div>
+      <div className="max-h-64 overflow-auto rounded-lg border border-slate-100">
+        <table className="w-full text-left">
+          <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase text-slate-400">
+            <tr>
+              <th className="px-2 py-1 font-medium">#</th>
+              <th className="px-2 py-1 font-medium">Time</th>
+              <th className="px-2 py-1 font-medium">Units</th>
+              <th className="px-2 py-1 font-medium">Likes</th>
+              <th className="px-2 py-1 font-medium">Cum %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((k, i) => (
+              <tr key={i} className={`border-t border-slate-50 ${next && k.t === next.t ? "bg-amber-50 font-medium" : ""}`}>
+                <td className="px-2 py-1 text-slate-400">{i + 1}</td>
+                <td className="px-2 py-1">{fmtTime(k.t)}</td>
+                <td className="px-2 py-1">{k.amount.toLocaleString("en-IN")}</td>
+                <td className="px-2 py-1 text-slate-500">{k.likes}</td>
+                <td className="px-2 py-1">{Math.round((k.cumulative / o.quantity) * 100)}%</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
 
 function useNow(ms = 5000) {
   const [now, setNow] = useState(() => Date.now());
@@ -38,6 +91,7 @@ export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: stri
   const now = useNow(5000);
   const [f, setF] = useState<(typeof filters)[number]>("all");
   const [q, setQ] = useState("");
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const rows = orders
     .map((o) => ({ o, p: progress(o, now) }))
@@ -119,6 +173,17 @@ export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: stri
                         </span>
                       </div>
                       <GrowthChart ticks={p.ticks} now={now} showLikes={o.likes > 0} height={180} />
+                      <button
+                        type="button"
+                        onClick={() => setOpenId(openId === o.id ? null : o.id)}
+                        className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={openId === o.id ? "rotate-180 transition-transform" : "transition-transform"}>
+                          <path d="m6 9 6 6 6-6" />
+                        </svg>
+                        {openId === o.id ? "Hide schedule" : "Show schedule"}
+                      </button>
+                      {openId === o.id && <OrderPlan o={o} now={now} />}
                     </div>
                   </td>
                 </tr>
