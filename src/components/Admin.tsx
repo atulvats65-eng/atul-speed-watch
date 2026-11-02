@@ -36,9 +36,10 @@ export default function Admin() {
   const services = useServices();
 
   const [duration, setDuration] = useState<"1d" | "7d" | "30d" | "lifetime">("7d");
-  const [count, setCount] = useState(1);
+  const [count, setCount] = useState(5);
   const [isAdmin, setIsAdmin] = useState(false);
   const [note, setNote] = useState("");
+  const [keyName, setKeyName] = useState("");
   const [fresh, setFresh] = useState<string[]>([]);
 
   const [sName, setSName] = useState("");
@@ -52,15 +53,17 @@ export default function Admin() {
   const userList = Object.values(users).sort((a, b) => b.createdAt - a.createdAt);
   const revenue = orders.reduce((a, o) => a + o.charge, 0);
 
-  const generate = () => {
+  const generate = (howMany?: number) => {
     const codes: string[] = [];
-    const n = Math.max(1, Math.min(50, count));
+    const n = Math.max(1, Math.min(50, howMany ?? count));
+    const base = keyName.trim() || note.trim();
     for (let i = 0; i < n; i++) {
-      const label = note ? `${note}${n > 1 ? ` #${i + 1}` : ""}` : undefined;
+      const label = base ? `${base}${n > 1 ? ` #${i + 1}` : ""}` : undefined;
       codes.push(adminCreateUser(label, { duration, isAdmin, note: label }));
     }
     setFresh(codes);
     setNote("");
+    setKeyName("");
     toast.success(`${n} key ban gayi`);
   };
 
@@ -110,7 +113,10 @@ export default function Admin() {
       <Card className="space-y-4 p-6">
         <h2 className="text-sm font-semibold text-slate-700">Access keys generate karein</h2>
 
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Field label="Name (key ka naam)">
+            <Input placeholder="e.g. Rahul" value={keyName} onChange={(e) => setKeyName(e.target.value)} />
+          </Field>
           <Field label="Validity">
             <Select value={duration} onChange={(e) => setDuration(e.target.value as typeof duration)}>
               <option value="1d">1 Day</option>
@@ -123,7 +129,7 @@ export default function Admin() {
             <Input type="number" min={1} max={50} value={count} onChange={(e) => setCount(Number(e.target.value))} />
           </Field>
           <Field label="Note (optional)">
-            <Input placeholder="e.g. Rahul" value={note} onChange={(e) => setNote(e.target.value)} />
+            <Input placeholder="e.g. client-1" value={note} onChange={(e) => setNote(e.target.value)} />
           </Field>
         </div>
 
@@ -132,7 +138,10 @@ export default function Admin() {
           <span>Admin key banao (yeh bhi admin panel khol sakegi)</span>
         </label>
 
-        <Button onClick={generate}>Generate keys</Button>
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={() => generate()}>Generate {count} Keys</Button>
+          <Button className="bg-slate-200 text-slate-800 hover:bg-slate-300" onClick={() => generate(5)}>Quick · 5 Keys</Button>
+        </div>
 
         {fresh.length > 0 && (
           <div className="rounded-xl bg-emerald-50 p-4">
