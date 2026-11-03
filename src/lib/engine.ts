@@ -383,9 +383,10 @@ function humanAutoSchedule(o: Order): Tick[] {
 }
 
 export function schedule(o: Order): Tick[] {
+  // S-Curve always keeps its sigmoid shape — manual duration never overrides it.
+  if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.autoHuman) return humanAutoSchedule(o);
   if (o.durationMs) return timedSchedule(o);
-  if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);
   const p = profileParams(o);
   const ticks: Tick[] = [];

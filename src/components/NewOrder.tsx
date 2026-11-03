@@ -70,7 +70,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [categories, category, service, serviceId]);
 
-  const charge = service ? Math.round(chargeFor(service, quantity || 0, likes) * 100) / 100 : 0;
+  const charge = service ? Math.round(chargeFor(service, Number(quantity) || 0, Number(likes) || 0) * 100) / 100 : 0;
 
   const previewOrder = {
     id: "preview",

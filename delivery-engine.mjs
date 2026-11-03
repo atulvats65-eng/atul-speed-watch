@@ -318,9 +318,10 @@ function organicSchedule(o) {
 }
 
 function schedule(o) {
+  // S-Curve always keeps its sigmoid shape — manual duration never overrides it.
+  if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.autoHuman) return organicSchedule(o);
   if (o.durationMs) return timedSchedule(o);
-  if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return organicSchedule(o);
   const p = profileParams(o);
   const ticks = [];

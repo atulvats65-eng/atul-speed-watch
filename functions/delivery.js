@@ -180,6 +180,7 @@ function stealthSchedule(o) {
 }
 
 function schedule(o) {
+  // S-Curve always keeps its sigmoid shape — manual duration never overrides it.
   if (o.profile === "scurve") return sCurveSchedule(o);
   if (o.profile === "stealth") return stealthSchedule(o);
   const p = profileParams(o);
