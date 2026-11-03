@@ -125,31 +125,65 @@ function paceAt(profile: string | undefined, frac: number): number {
 function sCurveSchedule(o: Order): Tick[] {
   const quantity = o.quantity;
   const duration = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (quantity / 1000) * SCURVE_PER_1000));
-  const n = Math.max(10, Math.min(120, Math.floor(duration / (5 * 60_000))));
+  const n = Math.max(12, Math.min(120, Math.floor(duration / (5 * 60_000))));
   const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
   const r1 = raw(1);
   const frac = (x: number) => (raw(x) - r0) / (r1 - r0);
+
   const ticks: Tick[] = [];
   let prev = 0;
+
+  // First drop: small (~1–2%), lands ~1 minute after placing (original behaviour).
+  let firstTarget = Math.max(1, Math.round(quantity * 0.015));
+  firstTarget = Math.min(MAX_DROP, Math.max(FLOOR_SCURVE, firstTarget));
+  prev += firstTarget;
+  ticks.push({
+    t: o.createdAt + 60_000,
+    amount: firstTarget,
+    likes: Math.round((firstTarget / quantity) * o.likes),
+    cumulative: Math.min(prev, quantity),
+  });
+
+  // Full-quantity sigmoid targets → natural S-curve with tapering end.
+  // We don't force one big final drop; the sigmoid itself lands on 100%.
   for (let i = 1; i <= n; i++) {
-    const x = Math.max(1 / n, (i / n) * 0.999); // first drop near start
-    const cum = Math.round(frac(x) * quantity);
-    const amount = cum - prev;
-    if (amount > 0) {
-      // First drop lands ~1 minute after placing; rest follow the sigmoid curve.
-      const t = i === 1 ? o.createdAt + 60_000 : o.createdAt + Math.round(x * duration);
-      const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
-      const drop = Math.min(MAX_DROP, Math.max(FLOOR_SCURVE, Math.round(amount * nightSlow)));
-      prev += drop;
-      ticks.push({
-        t,
-        amount: drop,
-        likes: Math.round((drop / quantity) * o.likes),
-        cumulative: Math.min(prev, quantity),
-      });
-    }
+    const x = i / n;
+    const target = Math.round(frac(x) * quantity);
+    if (target <= prev) continue;
+    const amount = target - prev;
+    if (amount <= 0) continue;
+    const t = o.createdAt + Math.round(x * duration);
+    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
+    // No hard cap for S-Curve — deliver the true sigmoid increment so the curve
+    // stays smooth and always reaches 100% (mid batches ~200-400, organic).
+    const drop = Math.max(FLOOR_SCURVE, Math.round(amount * nightSlow));
+    const capped = Math.min(drop, quantity - prev);
+    if (capped <= 0) break;
+    prev += capped;
+    ticks.push({
+      t,
+      amount: capped,
+      likes: Math.round((capped / quantity) * o.likes),
+      cumulative: Math.min(prev, quantity),
+    });
+    if (prev >= quantity) break;
   }
+
+  // Small leftover (if any) is absorbed into the last drop so it always hits 100%.
+  if (prev < quantity && ticks.length > 0) {
+    const last = ticks[ticks.length - 1]!;
+    last.amount += quantity - prev;
+    last.cumulative = quantity;
+  } else if (prev < quantity) {
+    ticks.push({
+      t: o.createdAt + duration,
+      amount: quantity - prev,
+      likes: Math.round(((quantity - prev) / quantity) * o.likes),
+      cumulative: quantity,
+    });
+  }
+
   if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = quantity;
   return ticks;
 }
