@@ -133,11 +133,12 @@ function sCurveSchedule(o: Order): Tick[] {
   const ticks: Tick[] = [];
   let prev = 0;
   for (let i = 1; i <= n; i++) {
-    const x = i / n;
+    const x = Math.max(1 / n, (i / n) * 0.999); // first drop near start
     const cum = Math.round(frac(x) * quantity);
     const amount = cum - prev;
     if (amount > 0) {
-      const t = o.createdAt + Math.round(x * duration);
+      // First drop lands ~1 minute after placing; rest follow the sigmoid curve.
+      const t = i === 1 ? o.createdAt + 60_000 : o.createdAt + Math.round(x * duration);
       const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
       const drop = Math.min(MAX_DROP, Math.max(FLOOR_SCURVE, Math.round(amount * nightSlow)));
       prev += drop;
@@ -212,22 +213,25 @@ function organicSchedule(o: Order): Tick[] {
     const f = Math.max(0.02, Math.min(0.98, centers[si]! + jitter));
     let t = o.createdAt + Math.round(f * dur);
 
-    // Enforce a minimum 15-minute gap between consecutive drops (human-like).
-    if (lastT && t - lastT < 15 * 60_000) {
-      t = lastT + (15 + rnd() * 15) * 60_000;
+    const isFirst = lastT === 0;
+    if (isFirst) {
+      t = o.createdAt + 60_000;
+    } else {
+      // Enforce a minimum 15-minute gap between consecutive drops (human-like).
+      if (t - lastT < 15 * 60_000) {
+        t = lastT + (15 + rnd() * 15) * 60_000;
+      }
+      // Avoid deep-night pushes (except the very first 1-minute drop).
+      if (isNight(t)) {
+        const d = new Date(t + IST);
+        d.setUTCHours(7, 0, 0, 0);
+        let nt = d.getTime() - IST;
+        if (nt <= t) nt += 86_400_000;
+        const f2 = (nt - o.createdAt) / dur;
+        if (f2 > 0 && f2 < 1) t = nt;
+      }
     }
     lastT = t;
-
-    // Avoid deep-night pushes: shift to next 7am so activity looks like a human
-    // awake during the day (huge detection signal).
-    if (isNight(t)) {
-      const d = new Date(t + IST);
-      d.setUTCHours(7, 0, 0, 0);
-      let nt = d.getTime() - IST;
-      if (nt <= t) nt += 86_400_000;
-      const f2 = (nt - o.createdAt) / dur;
-      if (f2 > 0 && f2 < 1) t = nt;
-    }
 
     let amount = Math.max(1, Math.round(baseAmount * (0.55 + rnd() * 0.9)));
     if (cum + amount > q) amount = q - cum;
@@ -354,7 +358,7 @@ function timedSchedule(o: Order): Tick[] {
   let cum = 0;
   for (let i = 1; i <= n; i++) {
     const x = i / n;
-    const t = o.createdAt + Math.round(x * dur);
+    const t = i === 1 ? o.createdAt + 60_000 : o.createdAt + Math.round(x * dur);
     let amount = baseAmount;
     if (i === n || cum + baseAmount >= q) amount = q - cum;
     if (amount <= 0) break;
@@ -390,9 +394,10 @@ export function schedule(o: Order): Tick[] {
   if (o.profile === "stealth") return stealthSchedule(o);
   const p = profileParams(o);
   const ticks: Tick[] = [];
-  let t = o.createdAt;
+  let t = o.createdAt; // first drop lands at +60s below
   let cumulative = 0;
   let rnd = 7;
+  let first = true;
   while (cumulative < o.quantity) {
     rnd = (rnd * 9301 + 49297) % 233280;
     const r = rnd / 233280;
@@ -420,7 +425,10 @@ export function schedule(o: Order): Tick[] {
       }
     }
 
-    t += (gapMin + r * (gapMax - gapMin)) * 60_000;
+    // First drop lands ~1 minute after placing (original behaviour); after that,
+    // apply the per-mode gap.
+    t += first ? 60_000 : (gapMin + r * (gapMax - gapMin)) * 60_000;
+    first = false;
     const frac = Math.min(1, cumulative / o.quantity);
     const amount = Math.round((amountMin + r * (amountMax - amountMin)) * paceAt(o.profile, frac));
     if (amount <= 0) break;
