@@ -1,13 +1,43 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Card, Field, Input } from "./ui";
 import { signIn, signInGoogle } from "../lib/store";
-import { firebaseGoogleLogin, isFirebaseReady } from "../lib/firebase";
+import { getSupabase, isSupabaseReady } from "../lib/supabase";
 
 export default function LoginScreen() {
   const [key, setKey] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // If Supabase redirected back from Google OAuth, finalize the sign-in.
+  useEffect(() => {
+    const sb = getSupabase();
+    if (!sb) return;
+    let cancelled = false;
+    void sb.auth.getSession().then(({ data }) => {
+      if (cancelled) return;
+      const user = data.session?.user;
+      if (!user) return;
+      signInGoogle({
+        uid: user.id,
+        email: user.email ?? undefined,
+        displayName: user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email?.split("@")[0],
+      });
+    });
+    const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user;
+      if (!user) return;
+      signInGoogle({
+        uid: user.id,
+        email: user.email ?? undefined,
+        displayName: user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email?.split("@")[0],
+      });
+    });
+    return () => {
+      cancelled = true;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
 
   const submit = async () => {
     if (key.trim().length < 4) {
@@ -21,14 +51,34 @@ export default function LoginScreen() {
   };
 
   const googleLogin = async () => {
-    if (!isFirebaseReady()) {
-      setError("Firebase configured nahi hai — Google login ke liye Firebase setup chahiye.");
+    if (!isSupabaseReady()) {
+      setError("Supabase configured nahi hai — Google login ke liye Supabase setup chahiye.");
+      return;
+    }
+    const sb = getSupabase();
+    if (!sb) {
+      setError("Supabase client initialize nahi hua.");
       return;
     }
     try {
       setBusy(true);
-      const user = await firebaseGoogleLogin();
-      signInGoogle({ uid: user.uid, email: user.email ?? undefined, displayName: user.displayName ?? undefined });
+      const { data, error } = await sb.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) throw error;
+      // If a session is already present (e.g. OAuth popup flow on some setups),
+      // finalize the sign-in immediately; otherwise the redirect handles it.
+      const { data: sess } = await sb.auth.getSession();
+      if (sess.session?.user) {
+        const user = sess.session.user;
+        signInGoogle({
+          uid: user.id,
+          email: user.email ?? undefined,
+          displayName: user.user_metadata?.full_name ?? user.user_metadata?.name ?? user.email?.split("@")[0],
+        });
+      }
+      void data;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Google login failed");
       setBusy(false);

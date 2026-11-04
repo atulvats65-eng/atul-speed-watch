@@ -18,17 +18,13 @@ tarike hain. **Domain kuch nahi chahiye** - hosting apna link degi.
 
 ---
 
-## Option B: Firebase Hosting
-
-Project me `firebase.json` pehle se hosting ke liye ready hai (dist folder).
+## Option B: Node server (server.mjs)
 
 ```sh
-npm install -g firebase-tools
-firebase login
 npm run build
-firebase deploy --only hosting
+npm start        # server.mjs → http://localhost:8080
 ```
-Link: `https://<project>.web.app`
+> `PORT` environment variable se port badla ja sakta hai.
 
 ---
 
@@ -36,13 +32,16 @@ Link: `https://<project>.web.app`
 
 - App **time se progress compute** karti hai → orders kabhi "rukte" nahi dikhte,
   jab bhi kholo sahi progress dikhta hai.
-- Agar `.env` me `VITE_FIREBASE_*` config ho → data **Firestore me cloud** hota
-  hai, isliye dost bhi same orders dekhega (orders shared).
-- **Static hosting** (Vercel/Firebase free) `server.mjs` ka background loop nahi
-  chala sakti — par iski zaroorat nahi kyunki browser khud lagta hai.
+- Agar `.env` me `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` ho → data
+  **Supabase tables me cloud** hota hai, isliye dost bhi same orders dekhega
+  (orders shared, cross-device).
+- **Static hosting** (Vercel) `server.mjs` ka background loop nahi chala sakti —
+  par iski zaroorat nahi kyunki browser khud lagta hai. (SMM proxy ke liye
+  server.mjs ya Vite proxy chahiye.)
 
 ---
 
 ## Link dost ko do
 
-Deploy ke baad aaya `https://...` link copy karke dost ko WhatsApp/Telegram par bhej do. Wo browser me kholke use karega.
+Deploy ke baad aaya `https://...` link copy karke dost ko WhatsApp/Telegram par
+bhej do. Wo browser me kholke use karega.

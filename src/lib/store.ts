@@ -1,9 +1,8 @@
-// localStorage-backed order store with reactive hook. When Firebase is
-// configured, every change is also mirrored to Firestore (best-effort).
+// localStorage-backed order store with reactive hook. When Supabase is
+// configured, every change is also mirrored to Supabase (best-effort).
 import { useSyncExternalStore } from "react";
 import type { Order, Service, ServiceKind } from "./engine";
-import { isFirebaseReady } from "./firebase";
-import { getSupabase } from "./supabase";
+import { getSupabase, isSupabaseReady } from "./supabase";
 import {
   cloudGetUser,
   cloudPushOrders,
@@ -11,6 +10,7 @@ import {
   cloudWriteUsers,
   cloudWriteApiCfg,
   cloudWriteTx,
+  cloudWriteServices,
 } from "./cloud";
 import { remotePushOrder, remoteRemoveOrder } from "./remote";
 
@@ -77,7 +77,7 @@ export function addOrder(o: Order) {
   void s;
   const next = [order, ...getOrders()];
   setOrders(next);
-  if (isFirebaseReady()) cloudPushOrders(next);
+  if (isSupabaseReady()) cloudPushOrders(next);
   remotePushOrder(order);
 }
 export function updateOrder(id: string, patch: Partial<Order>) {
@@ -85,13 +85,13 @@ export function updateOrder(id: string, patch: Partial<Order>) {
   setOrders(next);
   const target = next.find((o) => o.id === id);
   if (target) {
-    if (isFirebaseReady()) cloudPushOrders([target]);
+    if (isSupabaseReady()) cloudPushOrders([target]);
     remotePushOrder(target);
   }
 }
 export function deleteOrder(id: string) {
   setOrders(getOrders().filter((o) => o.id !== id));
-  if (isFirebaseReady()) cloudRemoveOrder(id);
+  if (isSupabaseReady()) cloudRemoveOrder(id);
   remoteRemoveOrder(id);
 }
 
@@ -122,7 +122,7 @@ export const useApiCfg = () => useStored<ApiCfg>(K_API_CFG(), EMPTY_API);
 export const getApiCfg = () => read<ApiCfg>(K_API_CFG(), EMPTY_API);
 export function saveApiCfg(cfg: ApiCfg) {
   write(K_API_CFG(), cfg);
-  if (isFirebaseReady()) cloudWriteApiCfg(cfg);
+  if (isSupabaseReady()) cloudWriteApiCfg(cfg);
 }
 
 /* ---- services (user-added + API imported — single unified list) ---- */
@@ -177,6 +177,7 @@ export const getServices = () => {
 };
 export function saveServices(list: Service[]) {
   write(K_SERVICES(), list);
+  if (isSupabaseReady()) cloudWriteServices(list);
 }
 export function addService(s: Service) {
   saveServices([...getServices().filter((x) => x.id !== s.id), s]);
@@ -352,7 +353,7 @@ export const useUsers = () => useStored<Record<string, PanelUser>>(K_USERS, {});
 export const getUsers = () => read<Record<string, PanelUser>>(K_USERS, {});
 const writeUsers = (all: Record<string, PanelUser>) => {
   write(K_USERS, all);
-  if (isFirebaseReady()) cloudWriteUsers(all);
+  if (isSupabaseReady()) cloudWriteUsers(all);
 };
 
 function ensureUser(u: { key: string; admin: boolean; name: string }) {
@@ -403,7 +404,7 @@ export const getTx = () => read<Tx[]>(K_TX(), []);
 export function addTx(t: Tx) {
   const next = [t, ...getTx()];
   write(K_TX(), next);
-  if (isFirebaseReady()) cloudWriteTx(next);
+  if (isSupabaseReady()) cloudWriteTx(next);
 }
 
 /* ---- cloud -> local merge (used by CloudSync) ---- */
@@ -423,6 +424,14 @@ export function applyCloudUsers(cloud: Record<string, PanelUser>) {
   const merged: Record<string, PanelUser> = { ...cloud };
   for (const k of Object.keys(local)) if (!(k in merged)) merged[k] = local[k]!;
   write(K_USERS, merged);
+}
+
+export function applyCloudServices(cloud: Service[]) {
+  if (!Array.isArray(cloud)) return;
+  const local = getServices();
+  const byId = new Map(local.map((s) => [s.id, s]));
+  for (const s of cloud) byId.set(s.id, s);
+  write(K_SERVICES(), Array.from(byId.values()));
 }
 
 export function applyCloudApiCfg(cloud: ApiCfg) {

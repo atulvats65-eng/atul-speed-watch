@@ -2,48 +2,45 @@
 
 A professional social-media delivery panel: place orders (views / likes /
 followers / comments), choose delivery speed and night mode, and track live
-progress — with an optional Firebase backend.
+progress — with an optional Supabase backend.
 
 ## Features
 - **Dashboard** — totals, active orders, delivered units, spend, and a 7-day delivery chart
-- **Naya Order** — pick service, link, quantity, bonus likes, speed profile (Safe/Normal/Turbo/Micro/Custom), night mode, and **Humanize/Bot-safe** delivery
+- **New Order** — pick service, link, quantity, bonus likes, speed profile (Safe/Normal/Turbo/Micro/Custom), night mode, and **Humanize/Bot-safe** delivery
 - **Orders** — live progress bars, status badges, ETA, cancel & delete, status filters
 - **Services** — all services with rates
-- **Wallet** — balance, deposit requests, transaction history
 - **SMM API** — connect your SMM provider (URL + API key + backup), test connection
-- **Admin** — users, balances, pending deposits, overview stats
+- **Admin** — user/access keys, orders overview, service manager
 - **Settings** — profile, account info, reset data
-- **Backend (optional)** — Firebase Auth + Firestore sync when configured
+- **Backend (optional)** — Supabase sync (cross-device) + Google login when configured
 
 ## Run locally
 ```sh
 npm install
 npm run dev
 ```
-## the `http://localhost:5173` (or the printed port).
+Then open `http://localhost:5173` (or the printed port).
 
 ## Access
-Any key of 4+ chars opens the panel. `ATUL-ADMIN` grants admin access.
+Any verified key opens the panel. `ATUL-ADMIN` grants admin access. Admin can
+generate access keys on the Admin page; keys sync to Supabase so they work on
+any device.
 
-## Firebase backend (database)
+## Supabase backend (database)
 
-Firebase Firestore ko database backend ke roop me use karta hai. Jab
-`.env` me `VITE_FIREBASE_*` config bhari hoti hai, saara data — orders, users,
-balances, transactions aur SMM config — cloud par sync hota hai aur doosre
-devices se live update hota hai. Bina config ke app localStorage par chalti
-rahegi.
+Supabase tables ko database backend ke roop me use karta hai. Jab `.env` me
+`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` bhari hoti hai, saara data —
+orders, users, services, transactions aur SMM config — cloud par sync hota hai
+aur doosre devices se live update hota hai (realtime). Bina config ke app
+localStorage par chalti rahegi.
 
-Setup ke liye `SETUP.md` dekho. Collections: `orders`, `users`,
-`transactions`, `apiConfig`. Firestore rules `firestore.rules` me hain.
+Setup ke liye `SETUP.md` dekho. Tables: `access_keys`, `users`,
+`cloud_orders`, `services`, `api_configs`, `transactions` (see `supabase/schema.sql`).
 
 ```sh
-VITE_FIREBASE_API_KEY=...
-VITE_FIREBASE_AUTH_DOMAIN=...
-VITE_FIREBASE_PROJECT_ID=...
-VITE_FIREBASE_STORAGE_BUCKET=...
-VITE_FIREBASE_MESSAGING_SENDER_ID=...
-VITE_FIREBASE_APP_ID=...
+VITE_SUPABASE_URL=...
+VITE_SUPABASE_ANON_KEY=...
 ```
 
 ## Tech
-React 19 · Vite 8 · Tailwind CSS 4 · TypeScript · Firebase (optional)
+React 19 · Vite 8 · Tailwind CSS 4 · TypeScript · Supabase (optional)

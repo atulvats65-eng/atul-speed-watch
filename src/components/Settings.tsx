@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { isFirebaseReady } from "../lib/firebase";
+import { isSupabaseReady } from "../lib/supabase";
 import { signOut, updateSession, useSession } from "../lib/store";
 import { Button, Card, Field, GhostButton, Input } from "./ui";
 import { toast } from "./Toast";
@@ -44,10 +44,10 @@ export default function Settings() {
           <div className="mt-1">Role: {session?.admin ? "Admin" : "User"}</div>
           <div className="mt-1">
             Backend:{" "}
-            {isFirebaseReady() ? (
-              <span className="font-medium text-green-600">Firebase connected</span>
+            {isSupabaseReady() ? (
+              <span className="font-medium text-green-600">Supabase connected</span>
             ) : (
-              <span className="font-medium text-slate-600">LocalStorage (Firebase config nahi hai)</span>
+              <span className="font-medium text-slate-600">LocalStorage (Supabase config nahi hai)</span>
             )}
           </div>
         </div>

@@ -1,116 +1,290 @@
-// Cloud sync layer. Mirrors the app's data (orders, users, transactions, SMM
-// config) to Firestore when Firebase is configured, and listens for remote
-// changes. Never throws when Firebase is not configured — all calls become
-// no-ops so the app keeps working on localStorage.
+// Cloud sync layer (Supabase). Mirrors the app's data (orders, users, services,
+// transactions, SMM config) to Supabase tables and listens for realtime changes.
+// Never throws when Supabase is not configured — all calls become no-ops so the
+// app keeps working on localStorage.
+//
+// Tables (see supabase/schema.sql): access_keys, cloud_orders, services,
+// api_configs, transactions. Every user-owned row is namespaced by owner_code =
+// the current session (access) key.
 
-import { cloudSet, cloudDelete, cloudGet, cloudWatch, isFirebaseReady } from "./firebase";
-import { getSupabase } from "./supabase";
-import type { Order } from "./engine";
+import { getSupabase, isSupabaseReady } from "./supabase";
+import type { Order, Service } from "./engine";
 import type { PanelUser, ApiCfg, Tx } from "./store";
 
-const C_ORDERS = "orders";
-const C_USERS = "users";
-const C_API = "apiConfig";
-const C_TX = "transactions";
-const API_SETTINGS_ID = "settings";
+function currentOwnerCode(): string {
+  try {
+    const raw = localStorage.getItem("atul_session");
+    if (!raw) return "";
+    const s = JSON.parse(raw) as { key?: string } | null;
+    return s?.key ?? "";
+  } catch {
+    return "";
+  }
+}
 
-/* ---- Orders ---- */
+function iso(): string {
+  return new Date().toISOString();
+}
+
+/* ---- Orders (cloud_orders) ---- */
 
 export function cloudPushOrders(orders: Order[]) {
-  if (!isFirebaseReady()) return;
-  for (const o of orders) {
-    void cloudSet(C_ORDERS, o.id, o as unknown as Record<string, unknown>);
-  }
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  const rows = orders.map((o) => ({
+    id: o.id,
+    owner_code: owner,
+    data: o as unknown as Record<string, unknown>,
+    updated_at: iso(),
+  }));
+  void sb.from("cloud_orders").upsert(rows, { onConflict: "id" });
 }
 
 export function cloudRemoveOrder(id: string) {
-  if (!isFirebaseReady()) return;
-  void cloudDelete(C_ORDERS, id);
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  void sb.from("cloud_orders").delete().eq("id", id).eq("owner_code", owner);
 }
 
 export function cloudWatchOrders(cb: (orders: Order[]) => void) {
-  return cloudWatch(C_ORDERS, (docs) => {
-    const orders = docs.map((d) => d.data as unknown as Order);
-    orders.sort((a, b) => b.createdAt - a.createdAt);
-    cb(orders);
-  });
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return () => {};
+  const load = () => {
+    sb.from("cloud_orders")
+      .select("data")
+      .eq("owner_code", owner)
+      .then(({ data }) => {
+        if (!data) return;
+        const orders = data.map((r) => r.data as unknown as Order);
+        orders.sort((a, b) => b.createdAt - a.createdAt);
+        cb(orders);
+      });
+  };
+  load();
+  const ch = sb
+    .channel(`orders-${owner}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "cloud_orders", filter: `owner_code=eq.${owner}` },
+      load,
+    )
+    .subscribe();
+  return () => {
+    void sb.removeChannel(ch);
+  };
 }
 
-/* ---- Users ---- */
+/* ---- Users (access_keys) ---- */
 
 export function cloudWriteUsers(all: Record<string, PanelUser>) {
-  if (!isFirebaseReady()) return;
-  for (const [key, u] of Object.entries(all)) {
-    void cloudSet(C_USERS, key, u as unknown as Record<string, unknown>);
-  }
+  const sb = getSupabase();
+  if (!sb || !isSupabaseReady()) return;
+  const rows = Object.values(all).map((u) => ({
+    code: u.key,
+    name: u.name,
+    note: u.note ?? null,
+    is_admin: !!u.admin,
+    active: !!u.active,
+    duration: u.duration || "lifetime",
+    expires_at: u.expiresAt && Number.isFinite(u.expiresAt) ? new Date(u.expiresAt).toISOString() : null,
+  }));
+  void sb.from("access_keys").upsert(rows, { onConflict: "code" });
 }
 
 export function cloudWatchUsers(cb: (all: Record<string, PanelUser>) => void) {
-  return cloudWatch(C_USERS, (docs) => {
-    const map: Record<string, PanelUser> = {};
-    for (const d of docs) map[d.id] = d.data as unknown as PanelUser;
-    cb(map);
-  });
+  const sb = getSupabase();
+  if (!sb || !isSupabaseReady()) return () => {};
+  const load = () => {
+    sb.from("access_keys")
+      .select("code, name, note, is_admin, active, duration, expires_at")
+      .then(({ data }) => {
+        if (!data) return;
+        const map: Record<string, PanelUser> = {};
+        for (const d of data) {
+          map[d.code] = {
+            key: d.code,
+            name: d.name || "User",
+            admin: !!d.is_admin,
+            active: !!d.active,
+            createdAt: 0,
+            duration: d.duration || "lifetime",
+            expiresAt: d.expires_at ? new Date(d.expires_at).getTime() : undefined,
+            note: d.note || undefined,
+          };
+        }
+        cb(map);
+      });
+  };
+  load();
+  const ch = sb
+    .channel("users")
+    .on("postgres_changes", { event: "*", schema: "public", table: "access_keys" }, load)
+    .subscribe();
+  return () => {
+    void sb.removeChannel(ch);
+  };
 }
 
 export async function cloudGetUser(key: string): Promise<PanelUser | null> {
-  // Firebase registry fallback
-  if (isFirebaseReady()) {
-    const data = await cloudGet(C_USERS, key);
-    if (data) return data as unknown as PanelUser;
-  }
-  // Supabase access_keys registry (cross-device)
   const sb = getSupabase();
-  if (sb) {
-    const { data, error } = await sb
-      .from("access_keys")
-      .select("code, name, note, is_admin, active, duration, expires_at")
-      .eq("code", key)
-      .maybeSingle();
-    if (!error && data) {
-      const expiresAt = data.expires_at ? new Date(data.expires_at).getTime() : undefined;
-      return {
-        key: data.code,
-        name: data.name || "User",
-        admin: !!data.is_admin,
-        active: !!data.active,
-        createdAt: 0,
-        duration: data.duration || "lifetime",
-        expiresAt,
-        note: data.note || undefined,
-      };
-    }
-  }
-  return null;
+  if (!sb || !isSupabaseReady()) return null;
+  const { data, error } = await sb
+    .from("access_keys")
+    .select("code, name, note, is_admin, active, duration, expires_at")
+    .eq("code", key)
+    .maybeSingle();
+  if (error || !data) return null;
+  const expiresAt = data.expires_at ? new Date(data.expires_at).getTime() : undefined;
+  return {
+    key: data.code,
+    name: data.name || "User",
+    admin: !!data.is_admin,
+    active: !!data.active,
+    createdAt: 0,
+    duration: data.duration || "lifetime",
+    expiresAt,
+    note: data.note || undefined,
+  };
 }
 
-/* ---- Transactions ---- */
+/* ---- Services (services) ---- */
+
+export function cloudWriteServices(list: Service[]) {
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  const rows = list.map((s) => ({
+    id: s.id,
+    owner_code: owner,
+    data: s as unknown as Record<string, unknown>,
+    updated_at: iso(),
+  }));
+  void sb.from("services").upsert(rows, { onConflict: "id" });
+}
+
+export function cloudWatchServices(cb: (list: Service[]) => void) {
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return () => {};
+  const load = () => {
+    sb.from("services")
+      .select("data")
+      .eq("owner_code", owner)
+      .then(({ data }) => {
+        if (!data) return;
+        cb(data.map((r) => r.data as unknown as Service));
+      });
+  };
+  load();
+  const ch = sb
+    .channel(`services-${owner}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "services", filter: `owner_code=eq.${owner}` },
+      load,
+    )
+    .subscribe();
+  return () => {
+    void sb.removeChannel(ch);
+  };
+}
+
+/* ---- Transactions (transactions) ---- */
 
 export function cloudWriteTx(list: Tx[]) {
-  if (!isFirebaseReady()) return;
-  for (const t of list) {
-    void cloudSet(C_TX, t.id, t as unknown as Record<string, unknown>);
-  }
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  const rows = list.map((t) => ({
+    id: t.id,
+    owner_code: owner,
+    data: t as unknown as Record<string, unknown>,
+    updated_at: iso(),
+  }));
+  void sb.from("transactions").upsert(rows, { onConflict: "id" });
 }
 
 export function cloudWatchTx(cb: (list: Tx[]) => void) {
-  return cloudWatch(C_TX, (docs) => {
-    const list = docs.map((d) => d.data as unknown as Tx);
-    list.sort((a, b) => b.at - a.at);
-    cb(list);
-  });
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return () => {};
+  const load = () => {
+    sb.from("transactions")
+      .select("data")
+      .eq("owner_code", owner)
+      .then(({ data }) => {
+        if (!data) return;
+        const list = data.map((r) => r.data as unknown as Tx);
+        list.sort((a, b) => b.at - a.at);
+        cb(list);
+      });
+  };
+  load();
+  const ch = sb
+    .channel(`tx-${owner}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "transactions", filter: `owner_code=eq.${owner}` },
+      load,
+    )
+    .subscribe();
+  return () => {
+    void sb.removeChannel(ch);
+  };
 }
 
-/* ---- SMM API config ---- */
+/* ---- SMM API config (api_configs) ---- */
 
 export function cloudWriteApiCfg(cfg: ApiCfg) {
-  if (!isFirebaseReady()) return;
-  void cloudSet(C_API, API_SETTINGS_ID, cfg as unknown as Record<string, unknown>);
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  void sb.from("api_configs").upsert(
+    {
+      owner_code: owner,
+      url: cfg.url,
+      key: cfg.key,
+      backup_url: cfg.backupUrl,
+      backup_key: cfg.backupKey,
+      updated_at: iso(),
+    },
+    { onConflict: "owner_code" },
+  );
 }
 
 export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
-  return cloudWatch(C_API, (docs) => {
-    const d = docs.find((x) => x.id === API_SETTINGS_ID);
-    if (d) cb(d.data as unknown as ApiCfg);
-  });
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return () => {};
+  const load = () => {
+    sb.from("api_configs")
+      .select("url, key, backup_url, backup_key")
+      .eq("owner_code", owner)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) return;
+        cb({
+          url: data.url || "",
+          key: data.key || "",
+          backupUrl: data.backup_url || "",
+          backupKey: data.backup_key || "",
+        });
+      });
+  };
+  load();
+  const ch = sb
+    .channel(`api-${owner}`)
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "api_configs", filter: `owner_code=eq.${owner}` },
+      load,
+    )
+    .subscribe();
+  return () => {
+    void sb.removeChannel(ch);
+  };
 }
+
