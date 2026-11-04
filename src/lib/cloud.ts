@@ -4,6 +4,7 @@
 // no-ops so the app keeps working on localStorage.
 
 import { cloudSet, cloudDelete, cloudGet, cloudWatch, isFirebaseReady } from "./firebase";
+import { getSupabase } from "./supabase";
 import type { Order } from "./engine";
 import type { PanelUser, ApiCfg, Tx } from "./store";
 
@@ -53,9 +54,34 @@ export function cloudWatchUsers(cb: (all: Record<string, PanelUser>) => void) {
 }
 
 export async function cloudGetUser(key: string): Promise<PanelUser | null> {
-  if (!isFirebaseReady()) return null;
-  const data = await cloudGet(C_USERS, key);
-  return data ? (data as unknown as PanelUser) : null;
+  // Firebase registry fallback
+  if (isFirebaseReady()) {
+    const data = await cloudGet(C_USERS, key);
+    if (data) return data as unknown as PanelUser;
+  }
+  // Supabase access_keys registry (cross-device)
+  const sb = getSupabase();
+  if (sb) {
+    const { data, error } = await sb
+      .from("access_keys")
+      .select("code, name, note, is_admin, active, duration, expires_at")
+      .eq("code", key)
+      .maybeSingle();
+    if (!error && data) {
+      const expiresAt = data.expires_at ? new Date(data.expires_at).getTime() : undefined;
+      return {
+        key: data.code,
+        name: data.name || "User",
+        admin: !!data.is_admin,
+        active: !!data.active,
+        createdAt: 0,
+        duration: data.duration || "lifetime",
+        expiresAt,
+        note: data.note || undefined,
+      };
+    }
+  }
+  return null;
 }
 
 /* ---- Transactions ---- */

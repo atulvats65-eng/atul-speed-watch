@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import type { Order, Service, ServiceKind } from "./engine";
 import { isFirebaseReady } from "./firebase";
+import { getSupabase } from "./supabase";
 import {
   cloudGetUser,
   cloudPushOrders,
@@ -244,6 +245,23 @@ export function adminCreateUser(
     note: opts?.note?.trim() || undefined,
   };
   writeUsers(all);
+
+  // Mirror to Supabase so the key works on any device.
+  const sb = getSupabase();
+  if (sb) {
+    void sb.from("access_keys").insert({
+      code: key,
+      name: all[key]!.name,
+      note: all[key]!.note ?? null,
+      is_admin: !!opts?.isAdmin,
+      active: true,
+      duration,
+      expires_at: expiresAt ? new Date(expiresAt).toISOString() : null,
+    }).then(({ error }) => {
+      if (error) console.warn("Supabase key insert failed:", error.message);
+    });
+  }
+
   return key;
 }
 
@@ -251,6 +269,11 @@ export function adminDeleteUser(key: string) {
   const all = getUsers();
   delete all[key];
   writeUsers(all);
+
+  const sb = getSupabase();
+  if (sb) {
+    void sb.from("access_keys").delete().eq("code", key);
+  }
 }
 
 export async function signIn(key: string, name?: string): Promise<boolean> {
