@@ -30,12 +30,14 @@ create table if not exists public.cloud_orders (
   updated_at timestamptz not null default now()
 );
 
--- Services (per key, null = common)
+-- Services (per key — composite key so different owners can import the same
+-- provider service id without overwriting each other)
 create table if not exists public.services (
-  id text primary key,
-  owner_code text,
+  id text not null,
+  owner_code text not null,
   data jsonb not null,
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key (owner_code, id)
 );
 
 -- SMM API config (per key)

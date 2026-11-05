@@ -5,7 +5,7 @@
 // Zero runtime dependencies (uses only Node built-ins + global fetch).
 import { createServer } from "node:http";
 import { readFileSync, existsSync, statSync } from "node:fs";
-import { extname, join, normalize } from "node:path";
+import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEngine } from "./delivery-engine.mjs";
 
@@ -127,7 +127,8 @@ const server = createServer(async (req, res) => {
   if (pathname === "/") pathname = "/index.html";
 
   let filePath = join(DIST, normalize(pathname));
-  if (!filePath.startsWith(DIST)) {
+  const DIST_PREFIX = DIST + sep;
+  if (!filePath.startsWith(DIST_PREFIX) && filePath !== DIST) {
     res.writeHead(403);
     res.end("Forbidden");
     return;
@@ -142,7 +143,14 @@ const server = createServer(async (req, res) => {
   if (!isFile) filePath = join(DIST, "index.html");
 
   const ext = extname(filePath).toLowerCase();
-  const content = readFileSync(filePath);
+  let content;
+  try {
+    content = readFileSync(filePath);
+  } catch {
+    res.writeHead(500);
+    res.end("Internal server error: missing file");
+    return;
+  }
   res.writeHead(200, {
     "Content-Type": MIME[ext] || "application/octet-stream",
     "Content-Length": content.length,

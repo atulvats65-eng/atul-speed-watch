@@ -387,6 +387,14 @@ function schedule(o) {
     // apply the per-mode gap.
     t += first ? 60_000 : (gapMin + r * (gapMax - gapMin)) * 60000;
     first = false;
+
+    // Night "pause" mode: push the drop past the 12AM–6AM window.
+    if (o.night === "pause" && isNight(t)) {
+      const d = new Date(t + IST);
+      d.setUTCHours(7, 0, 0, 0);
+      t = d.getTime() - IST;
+      if (t <= 0) break;
+    }
     const frac = Math.min(1, cumulative / o.quantity);
     const amount = Math.round((amountMin + r * (amountMax - amountMin)) * paceAt(o.profile, frac));
     if (amount <= 0) break;

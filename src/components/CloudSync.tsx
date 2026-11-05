@@ -11,6 +11,9 @@ import {
   getServices,
   getTx,
   getUsers,
+  isKeyExpired,
+  signOut,
+  useSession,
 } from "../lib/store";
 import {
   cloudWatchApiCfg,
@@ -34,8 +37,20 @@ import { remoteFetchOrders, remoteProbe } from "../lib/remote";
  * served by server.mjs) so server-advanced progress is reflected.
  */
 export default function CloudSync() {
+  const session = useSession();
+
   useEffect(() => {
     if (!isSupabaseReady()) return;
+
+    // Re-validate the current session every mount: if the key was disabled or
+    // expired (locally or on the cloud), log the user out immediately.
+    if (session?.key && session.key.toUpperCase() !== "ATUL-ADMIN") {
+      const u = getUsers()[session.key];
+      if (u && (!u.active || isKeyExpired(u))) {
+        signOut();
+        return;
+      }
+    }
 
     // Initial upload: seed the cloud from whatever is on this device.
     const orders = getOrders();
@@ -56,8 +71,22 @@ export default function CloudSync() {
       cloudWatchServices(applyCloudServices),
       cloudWatchApiCfg(applyCloudApiCfg),
     ];
-    return () => offs.forEach((off) => off && off());
-  }, []);
+
+    // Pull server-side delivery engine progress when the app is served by
+    // server.mjs (Dev unused before; now actually used).
+    remoteProbe().then((avail) => {
+      if (!avail) return;
+      return remoteFetchOrders().then((remoteOrders) => {
+        if (remoteOrders && Array.isArray(remoteOrders) && remoteOrders.length > 0) {
+          applyCloudOrders(remoteOrders);
+        }
+      });
+    });
+
+    return () => {
+      offs.forEach((off) => off && off());
+    };
+  }, [session?.key]);
 
   return null;
 }

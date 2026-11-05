@@ -11,6 +11,7 @@ import {
   cloudWriteApiCfg,
   cloudWriteTx,
   cloudWriteServices,
+  cloudRemoveService,
 } from "./cloud";
 import { remotePushOrder, remoteRemoveOrder } from "./remote";
 
@@ -101,8 +102,10 @@ export function purgeDemoOrders() {
   const all = getOrders();
   const filtered = all.filter(
     (o) =>
-      !(o.serviceName && o.serviceName.includes("Demo")) &&
-      !(o.link && (o.link.includes("demo-") || o.link.includes("mini-"))),
+      // Only remove clearly-demo orders: service name starts with "Demo" AND the
+      // link is a synthetic demo/mini link. This never touches real orders whose
+      // link merely contains "mini-" or "demo-" (e.g. instagram.com/mini-store).
+      !(o.serviceName && o.serviceName.includes("Demo") && o.link && (o.link.includes("demo-") || o.link.includes("mini-"))),
   );
   if (filtered.length !== all.length) setOrders(filtered);
 }
@@ -184,24 +187,31 @@ export function addService(s: Service) {
 }
 export function removeService(id: string) {
   saveServices(getServices().filter((s) => s.id !== id));
+  // Delete from the cloud too so the removal propagates to other devices.
+  if (isSupabaseReady()) cloudRemoveService(id);
 }
 export function updateService(id: string, patch: Partial<Service>) {
   saveServices(getServices().map((s) => (s.id === id ? { ...s, ...patch } : s)));
 }
 
-// API import writes into the same unified list (append).
+// API import writes into the same unified list, deduplicating by id so a
+// re-import never creates duplicate rows (and never sends duplicate ids in one
+// upsert batch, which would make Postgres fail).
 export function saveApiServices(list: ApiService[]) {
-  const converted: Service[] = list.map((s) => ({
-    id: s.apiServiceId,
-    name: s.name,
-    category: s.category,
-    kind: s.kind,
-    rate: s.rate,
-    min: s.min,
-    max: s.max,
-    svcId: String(s.apiServiceId),
-  }));
-  saveServices([...getServices(), ...converted]);
+  const byId = new Map(getServices().map((s) => [s.id, s]));
+  for (const s of list) {
+    byId.set(s.apiServiceId, {
+      id: s.apiServiceId,
+      name: s.name,
+      category: s.category,
+      kind: s.kind,
+      rate: s.rate,
+      min: s.min,
+      max: s.max,
+      svcId: String(s.apiServiceId),
+    });
+  }
+  saveServices(Array.from(byId.values()));
 }
 export const useApiServices = () => useStored<Service[]>(K_SERVICES(), EMPTY);
 export const getApiServices = () => getServices();
@@ -297,6 +307,7 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
   const cloudUser = await cloudGetUser(k);
   if (cloudUser) {
     if (!cloudUser.active) return false;
+    if (isKeyExpired(cloudUser)) return false;
     ensureUser({ key: k, admin: cloudUser.admin, name: cloudUser.name });
     write(K_SESSION, { key: k, admin: cloudUser.admin, name: name?.trim() || cloudUser.name || "User" });
     return true;
@@ -322,6 +333,10 @@ export function updateSession(patch: Partial<Session>) {
 export function signOut() {
   localStorage.removeItem(K_SESSION);
   cache.delete(K_SESSION);
+  // Also end the Supabase auth session so the Google session doesn't survive
+  // logout (otherwise LoginScreen's getSession() would immediately re-login).
+  const sb = getSupabase();
+  if (sb) void sb.auth.signOut();
   window.dispatchEvent(new Event(EVT));
 }
 
@@ -412,26 +427,30 @@ export function addTx(t: Tx) {
 // don't create an echo loop when remote changes arrive.
 
 export function applyCloudOrders(cloud: Order[]) {
-  const local = getOrders();
-  const byId = new Map(local.map((o) => [o.id, o]));
-  for (const o of cloud) byId.set(o.id, o);
-  const merged = Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
+  // The cloud list is authoritative for this owner: replace the local list so
+  // that deletions on other devices also propagate here (merge would re-add
+  // deleted items).
+  if (!Array.isArray(cloud)) return;
+  const merged = [...cloud].sort((a, b) => b.createdAt - a.createdAt);
   write(K_ORDERS(), merged);
 }
 
 export function applyCloudUsers(cloud: Record<string, PanelUser>) {
-  const local = getUsers();
-  const merged: Record<string, PanelUser> = { ...cloud };
-  for (const k of Object.keys(local)) if (!(k in merged)) merged[k] = local[k]!;
-  write(K_USERS, merged);
+  // Authoritative replace so deleted/disabled keys don't resurrect locally.
+  // Always keep the current session user so the signed-in user is never dropped.
+  const map: Record<string, PanelUser> = { ...cloud };
+  const s = read<Session | null>(K_SESSION, null);
+  if (s && s.key && !map[s.key]) {
+    const local = getUsers()[s.key];
+    if (local) map[s.key] = local;
+  }
+  write(K_USERS, map);
 }
 
 export function applyCloudServices(cloud: Service[]) {
+  // Authoritative replace (not merge) so service deletions propagate.
   if (!Array.isArray(cloud)) return;
-  const local = getServices();
-  const byId = new Map(local.map((s) => [s.id, s]));
-  for (const s of cloud) byId.set(s.id, s);
-  write(K_SERVICES(), Array.from(byId.values()));
+  write(K_SERVICES(), cloud);
 }
 
 export function applyCloudApiCfg(cloud: ApiCfg) {

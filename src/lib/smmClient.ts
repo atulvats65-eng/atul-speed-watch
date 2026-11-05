@@ -106,17 +106,40 @@ export async function providerCall(
 export type BalanceInfo = { text: string; currency: string; value: number } | null;
 
 // Normalizes an SMM provider balance response into a display string, converting
-// USD/USDT to a rough INR figure (≈ ₹) for easier reading.
+// USD/USDT to a rough INR figure (≈ ₹) for easier reading. A currency is treated
+// as USD only when the provider explicitly says so — never guessed from a small
+// number (a ₹3 balance is not a dollar balance).
 export function parseBalance(data: unknown): BalanceInfo {
   const d = (data ?? {}) as { balance?: string | number; currency?: string };
   if (d.balance === undefined || d.balance === null) return null;
   const b = Number(d.balance);
   if (Number.isNaN(b)) return null;
   const cur = (d.currency ?? "").toUpperCase();
-  const isUsd = cur === "USD" || cur === "USDT" || b < 5;
+  const isUsd = cur === "USD" || cur === "USDT";
+  // Rough, best-effort conversion rate (used only when provider reports USD).
   const inr = isUsd ? (b * 94.6).toFixed(2) : null;
   const text = inr
-    ? `${d.balance} ${cur || "USD"} (≈ ₹${inr})`
+    ? `${d.balance} ${cur} (≈ ₹${inr})`
     : `${d.balance} ${cur || "INR"}`;
   return { text, currency: cur || (isUsd ? "USD" : "INR"), value: b };
+}
+
+// Place a real order with the SMM provider (action=add). Returns the provider's
+// order id when it succeeds, so the local order can reference the real one.
+export type PlaceOrderResult = { ok: boolean; orderId?: string; error?: string };
+
+export async function providerPlaceOrder(
+  baseUrl: string,
+  key: string,
+  opts: { service: string; link: string; quantity: number },
+): Promise<PlaceOrderResult> {
+  const r = await providerCall(baseUrl, key, "add", {
+    service: opts.service,
+    link: opts.link,
+    quantity: String(opts.quantity),
+  });
+  if (!r.ok) return { ok: false, error: r.error };
+  const d = r.data as { order?: string | number } | null;
+  const orderId = d?.order != null ? String(d.order) : undefined;
+  return { ok: true, orderId };
 }

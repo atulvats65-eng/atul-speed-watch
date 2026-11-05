@@ -120,23 +120,27 @@ function paceAt(profile: string | undefined, frac: number): number {
   return m;
 }
 
-// S-Curve delivery: cumulative delivered follows a sigmoid over the order's
-// lifetime — slow ramp-up, fast mid-section, then a tapering tail.
+// S-Curve delivery (organic / slow build): cumulative delivered grows slowly,
+// one small chunk at a time, with random 15–25 minute gaps between drops.
+// Uses a deterministic PRNG seeded by the order id so the same order always
+// produces the same schedule (consistent with the rest of the engine).
 function sCurveSchedule(o: Order): Tick[] {
   const quantity = o.quantity;
-  const duration = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (quantity / 1000) * SCURVE_PER_1000));
-  const n = Math.max(12, Math.min(120, Math.floor(duration / (5 * 60_000))));
-  const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
-  const r0 = raw(0);
-  const r1 = raw(1);
-  const frac = (x: number) => (raw(x) - r0) / (r1 - r0);
+  const rand = (() => {
+    let seed = 7;
+    for (let i = 0; i < o.id.length; i++) seed = (seed * 31 + o.id.charCodeAt(i)) | 0;
+    return mulberry32(seed);
+  })();
+
+  const gapMin = 15 * 60_000; // random gap floor: 15 minutes
+  const gapMax = 25 * 60_000; // random gap ceiling: 25 minutes
 
   const ticks: Tick[] = [];
   let prev = 0;
 
-  // First drop: small (~1–2%), lands ~1 minute after placing (original behaviour).
-  let firstTarget = Math.max(1, Math.round(quantity * 0.015));
-  firstTarget = Math.min(MAX_DROP, Math.max(FLOOR_SCURVE, firstTarget));
+  // First drop: a small opening (~0.5–1%), lands ~1 minute after placing.
+  let firstTarget = Math.max(1, Math.round(quantity * (0.005 + 0.005 * rand())));
+  firstTarget = Math.min(firstTarget, MAX_DROP);
   prev += firstTarget;
   ticks.push({
     t: o.createdAt + 60_000,
@@ -145,43 +149,46 @@ function sCurveSchedule(o: Order): Tick[] {
     cumulative: Math.min(prev, quantity),
   });
 
-  // Full-quantity sigmoid targets → natural S-curve with tapering end.
-  // We don't force one big final drop; the sigmoid itself lands on 100%.
-  for (let i = 1; i <= n; i++) {
-    const x = i / n;
-    const target = Math.round(frac(x) * quantity);
-    if (target <= prev) continue;
-    const amount = target - prev;
-    if (amount <= 0) continue;
-    const t = o.createdAt + Math.round(x * duration);
+  // Build slowly: random 15–25 min gaps, small "thoda-thoda" chunks each time.
+  let t = o.createdAt + 60_000;
+  while (prev < quantity && ticks.length < 500) {
+    t += gapMin + rand() * (gapMax - gapMin);
+
+    // Night "pause" mode: skip drops entirely during 12AM–6AM.
+    if (o.night === "pause" && isNight(t)) continue;
+    // Night "slow" mode: halve the chunk size to stretch delivery overnight.
     const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
-    // No hard cap for S-Curve — deliver the true sigmoid increment so the curve
-    // stays smooth and always reaches 100% (mid batches ~200-400, organic).
-    const drop = Math.max(FLOOR_SCURVE, Math.round(amount * nightSlow));
-    const capped = Math.min(drop, quantity - prev);
-    if (capped <= 0) break;
-    prev += capped;
+
+    // Small random chunk: ~0.5–1.5% of total, capped to keep it "thoda-thoda".
+    const pct = 0.005 + rand() * 0.01;
+    let drop = Math.round(quantity * pct * nightSlow);
+    drop = Math.max(FLOOR_SCURVE, Math.min(drop, MAX_DROP));
+    drop = Math.min(drop, quantity - prev);
+    if (drop <= 0) break;
+
+    prev += drop;
     ticks.push({
       t,
-      amount: capped,
-      likes: Math.round((capped / quantity) * o.likes),
+      amount: drop,
+      likes: Math.round((drop / quantity) * o.likes),
       cumulative: Math.min(prev, quantity),
     });
-    if (prev >= quantity) break;
   }
 
-  // Small leftover (if any) is absorbed into the last drop so it always hits 100%.
-  if (prev < quantity && ticks.length > 0) {
-    const last = ticks[ticks.length - 1]!;
-    last.amount += quantity - prev;
-    last.cumulative = quantity;
-  } else if (prev < quantity) {
-    ticks.push({
-      t: o.createdAt + duration,
-      amount: quantity - prev,
-      likes: Math.round(((quantity - prev) / quantity) * o.likes),
-      cumulative: quantity,
-    });
+  // Final leftover top-up so the order always reaches 100%.
+  if (prev < quantity) {
+    if (ticks.length > 0) {
+      const last = ticks[ticks.length - 1]!;
+      last.amount += quantity - prev;
+      last.cumulative = quantity;
+    } else {
+      ticks.push({
+        t: o.createdAt + 60_000,
+        amount: quantity,
+        likes: o.likes,
+        cumulative: quantity,
+      });
+    }
   }
 
   if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = quantity;
@@ -463,6 +470,15 @@ export function schedule(o: Order): Tick[] {
     // apply the per-mode gap.
     t += first ? 60_000 : (gapMin + r * (gapMax - gapMin)) * 60_000;
     first = false;
+
+    // Night "pause" mode: if the next drop would land in 12AM–6AM, push it past
+    // the night window (to 6 AM) so no delivery happens overnight.
+    if (o.night === "pause" && isNight(t)) {
+      const d = new Date(t);
+      d.setHours(6, 0, 0, 0);
+      t = d.getTime();
+      if (t <= 0) break;
+    }
     const frac = Math.min(1, cumulative / o.quantity);
     const amount = Math.round((amountMin + r * (amountMax - amountMin)) * paceAt(o.profile, frac));
     if (amount <= 0) break;

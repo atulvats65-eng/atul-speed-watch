@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chargeFor, newOrderId } from "../lib/engine";
 import type { NightMode, SpeedProfile } from "../lib/engine";
-import { addOrder, useServices } from "../lib/store";
+import { addOrder, useApiCfg, useServices } from "../lib/store";
+import { providerPlaceOrder } from "../lib/smmClient";
 import { Button, Card, Field, Input, Select } from "./ui";
 import { toast } from "./Toast";
 import DeliveryCurveChart from "./DeliveryCurveChart";
 
 export default function NewOrder({ onDone }: { onDone: () => void }) {
   const services = useServices();
+  const apiCfg = useApiCfg();
   const categories = useMemo(() => Array.from(new Set(services.map((s) => s.category))), [services]);
   const [category, setCategory] = useState("");
   const [serviceId, setServiceId] = useState("");
@@ -104,7 +106,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     );
   }
 
-  const submit = () => {
+  const submit = async () => {
     if (!service) return setError("Select a service first.");
     if (!link.trim()) return setError("Enter a link.");
     const q = Number(quantity);
@@ -136,6 +138,28 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     };
 
     addOrder(order);
+
+    // Best-effort: if an SMM API is configured, also place a real order with the
+    // provider (action=add). If it fails, the local simulated order is kept and
+    // we surface a warning — the panel still works as a simulator.
+    if (apiCfg.key && apiCfg.key.trim().length >= 4) {
+      const providerService = service.svcId || service.id;
+      const res = await providerPlaceOrder(apiCfg.url || "https://yoyomedia.in/api/v2", apiCfg.key, {
+        service: providerService,
+        link: link.trim(),
+        quantity: q,
+      });
+      if (res.ok) {
+        toast(`Order ${res.orderId ? `#${res.orderId} ` : ""}provider ko bhej diya.`);
+      } else {
+        toast(`Provider order fail: ${res.error ?? "unknown"} (simulation chalu)`, "error");
+      }
+    } else {
+      toast("Order place ho gaya! (simulation)");
+      onDone();
+      return;
+    }
+
     toast("Order place ho gaya!");
     onDone();
   };

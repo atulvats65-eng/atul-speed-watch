@@ -162,7 +162,14 @@ export function cloudWriteServices(list: Service[]) {
     data: s as unknown as Record<string, unknown>,
     updated_at: iso(),
   }));
-  void sb.from("services").upsert(rows, { onConflict: "id" });
+  void sb.from("services").upsert(rows, { onConflict: "owner_code,id" });
+}
+
+export function cloudRemoveService(id: string) {
+  const sb = getSupabase();
+  const owner = currentOwnerCode();
+  if (!sb || !isSupabaseReady() || !owner) return;
+  void sb.from("services").delete().eq("id", id).eq("owner_code", owner);
 }
 
 export function cloudWatchServices(cb: (list: Service[]) => void) {
