@@ -138,7 +138,11 @@ function paceAt(profile: string | undefined, frac: number): number {
 // first drop is ~minBatch at +60s, and the last tick lands exactly on q.
 function sCurveSchedule(o: Order): Tick[] {
   const q = o.quantity;
-  const duration = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
+  // Honor a custom timed window (durationMs) if set — otherwise use the profile
+  // duration. Gives the user control over the S-curve schedule time.
+  const duration = o.durationMs
+    ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
+    : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
   const n = Math.min(120, Math.max(12, Math.round(q / 120), Math.floor(duration / (2 * 60_000))));
   const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
@@ -515,30 +519,53 @@ export interface Batch {
   lastError?: string;
 }
 
-// Merge ticks into batches of at least `min` units (carry the remainder into the
-// next batch / final batch). Returns the full batch plan. The sum of batch
-// quantities always equals the sum of the input tick amounts.
+// Minimum/maximum provider batch size (per user requirement).
+export const BATCH_MIN_QTY = 100;
+export const BATCH_MAX_QTY = 250;
+
+// Merge ticks into batches of at least `min` units (default floor 100) and at
+// most BATCH_MAX_QTY (250) — batches above the max are split. The remainder is
+// carried forward; the last batch absorbs leftover if it stays <= max. The sum
+// of batch quantities always equals the sum of the input tick amounts.
 export function mergeToMin(ticks: Tick[], min: number): Batch[] {
-  const floor = Math.max(1, Math.floor(min));
+  const floor = Math.max(BATCH_MIN_QTY, Math.floor(min || 0));
   const batches: Batch[] = [];
   let acc = 0;
   let accLikes = 0;
   let firstT = 0;
   for (const tk of ticks) {
-    if (acc === 0) firstT = tk.t;
-    acc += tk.amount;
-    accLikes += tk.likes;
-    if (acc >= floor) {
-      batches.push({ index: batches.length, t: firstT, quantity: acc, likes: accLikes });
-      acc = 0;
-      accLikes = 0;
+    // A single tick larger than max must be split into multiple batches.
+    let remaining = tk.amount;
+    let likesTotal = tk.likes;
+    while (remaining > 0) {
+      if (acc === 0) firstT = tk.t;
+      const space = BATCH_MAX_QTY - acc;
+      if (acc >= floor && space <= 0) {
+        batches.push({ index: batches.length, t: firstT, quantity: acc, likes: accLikes });
+        acc = 0;
+        accLikes = 0;
+        continue;
+      }
+      const take = Math.min(remaining, space > 0 ? space : BATCH_MAX_QTY);
+      acc += take;
+      accLikes += Math.round((take / tk.amount) * likesTotal);
+      remaining -= take;
+      if (acc >= floor) {
+        batches.push({ index: batches.length, t: firstT, quantity: acc, likes: accLikes });
+        acc = 0;
+        accLikes = 0;
+      }
     }
   }
   if (acc > 0) {
     if (batches.length > 0) {
       const lastB = batches[batches.length - 1]!;
-      lastB.quantity += acc;
-      lastB.likes += accLikes;
+      if (lastB.quantity + acc <= BATCH_MAX_QTY) {
+        lastB.quantity += acc;
+        lastB.likes += accLikes;
+      } else {
+        batches.push({ index: batches.length, t: firstT, quantity: acc, likes: accLikes });
+      }
     } else {
       batches.push({ index: 0, t: firstT, quantity: acc, likes: accLikes });
     }
