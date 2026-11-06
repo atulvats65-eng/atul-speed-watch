@@ -34,6 +34,7 @@ export default async function handler(req, res) {
     const upstream = await forwardFetch(url, {
       method: "GET",
       allowlist: false,
+      allowTruncate: true,
       headers: {
         "User-Agent": UA,
         Accept: "text/html,application/xhtml+xml,*/*",

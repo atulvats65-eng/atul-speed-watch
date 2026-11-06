@@ -346,13 +346,19 @@ export function updateSession(patch: Partial<Session>) {
   write(K_SESSION, { ...s, ...patch });
 }
 
-export function signOut() {
+export async function signOut() {
+  // End the Supabase auth session first so LoginScreen's getSession() doesn't
+  // immediately re-login the Google user (race fix).
+  const sb = getSupabase();
+  if (sb) {
+    try {
+      await sb.auth.signOut();
+    } catch {
+      /* ignore */
+    }
+  }
   localStorage.removeItem(K_SESSION);
   cache.delete(K_SESSION);
-  // Also end the Supabase auth session so the Google session doesn't survive
-  // logout (otherwise LoginScreen's getSession() would immediately re-login).
-  const sb = getSupabase();
-  if (sb) void sb.auth.signOut();
   window.dispatchEvent(new Event(EVT));
 }
 
@@ -443,11 +449,15 @@ export function addTx(t: Tx) {
 // don't create an echo loop when remote changes arrive.
 
 export function applyCloudOrders(cloud: Order[]) {
-  // The cloud list is authoritative for this owner: replace the local list so
-  // that deletions on other devices also propagate here (merge would re-add
-  // deleted items).
+  // Never let an empty/failed cloud result wipe a non-empty local list. Merge
+  // by id so local-only rows survive; real deletions need explicit row-deletes
+  // (Phase F), not a wholesale replace.
   if (!Array.isArray(cloud)) return;
-  const merged = [...cloud].sort((a, b) => b.createdAt - a.createdAt);
+  const local = getOrders();
+  if (cloud.length === 0 && local.length > 0) return;
+  const byId = new Map(local.map((o) => [o.id, o]));
+  for (const o of cloud) byId.set(o.id, o);
+  const merged = Array.from(byId.values()).sort((a, b) => b.createdAt - a.createdAt);
   write(K_ORDERS(), merged);
 }
 
@@ -464,9 +474,14 @@ export function applyCloudUsers(cloud: Record<string, PanelUser>) {
 }
 
 export function applyCloudServices(cloud: Service[]) {
-  // Authoritative replace (not merge) so service deletions propagate.
+  // Never let an empty/failed cloud result wipe a non-empty local list. Merge by
+  // id so local-only rows survive.
   if (!Array.isArray(cloud)) return;
-  write(K_SERVICES(), cloud);
+  const local = getServices();
+  if (cloud.length === 0 && local.length > 0) return;
+  const byId = new Map(local.map((s) => [s.id, s]));
+  for (const s of cloud) byId.set(s.id, s);
+  write(K_SERVICES(), Array.from(byId.values()));
 }
 
 export function applyCloudApiCfg(cloud: ApiCfg) {

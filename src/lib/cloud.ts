@@ -269,7 +269,7 @@ export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
   if (!sb || !isSupabaseReady() || !owner) return () => {};
   const load = () => {
     sb.from("api_configs")
-      .select("url, key, backup_url, backup_key")
+      .select("url, key, backup_url, backup_key, likes_service_id")
       .eq("owner_code", owner)
       .maybeSingle()
       .then(({ data }) => {
@@ -296,10 +296,9 @@ export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
     void sb.removeChannel(ch);
   };
 }
-// Write the provider batch plan (R1) into order_batches. This is only called
-// when the dispatcher pipeline is "ready" (isDispatchReady), i.e. the owner-RLS
-// migration + Supabase Auth + the Edge Function are deployed. It uses the real
-// auth uid as owner_id.
+
+// Write the provider batch plan into order_batches. Only called when the
+// dispatcher pipeline is live (isDispatchReady). Uses the auth uid as owner_id.
 export async function cloudWriteBatches(
   orderId: string,
   batches: { index: number; t: number; quantity: number; likes: number }[],

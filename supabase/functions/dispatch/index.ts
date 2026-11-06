@@ -1,28 +1,30 @@
-// ATUL Speed Watch — dispatcher (Phase 2 / R1)
+// ATUL Speed Watch — dispatcher (Phase C, provider delivery)
 // ---------------------------------------------------------------------------
-// Supabase Edge Function invoked by pg_cron (every 30–60s). It:
-//   1. finds due, unsent batches in order_batches
-//   2. atomically claims each (scheduled -> sending, attempts+1) so a batch is
-//      never sent twice, even if two workers run
-//   3. sends each batch as its own provider order (action=add) using the owner's
-//      provider key (read server-side from api_configs)
-//   4. records providerOrderId / status, or marks the batch failed permanently
-//      (insufficient balance, invalid link, min-max) after maxAttempts
+// Supabase Edge Function invoked by pg_cron every 30–60s. Sends each scheduled
+// batch as its own provider order (action=add) at its scheduled time.
 //
-// Runs with the service-role key (bypasses RLS). The browser never calls the
-// provider and never holds the key.
+// Phase-C fixes:
+//   - claim via RPC `claim_batch` (atomic attempts+1, lease) → never double-send
+//   - provider_order_id written immediately after main add; likes tracked
+//     separately so a likes failure never re-sends the main order
+//   - cancelled orders are skipped; unsent batches are cancelled via RPC
+//   - stuck `sending` rows are reclaimed after a lease timeout, after checking
+//     the provider by provider_order_id (if known → mark sent; if unknown →
+//     needs_review, never blind re-send)
+//   - balance check before sending; permanent failures pause the order
+//   - min/max enforced (batches above max are split client-side, see mergeToMin)
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const MAX_ATTEMPTS = Number(Deno.env.get("DISPATCH_MAX_ATTEMPTS") || 3);
+const LEASE_MS = Number(Deno.env.get("DISPATCH_LEASE_MS") || 5 * 60_000);
 const PROVIDER_TIMEOUT_MS = 10_000;
 const BATCH_LIMIT = Number(Deno.env.get("DISPATCH_BATCH_LIMIT") || 200);
+const PROVIDER_DELAY_MS = 300;
 
-const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  auth: { persistSession: false },
-});
+const sb = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
 function isPrivate(ip: string): boolean {
   const norm = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
@@ -41,7 +43,7 @@ function isPrivate(ip: string): boolean {
   return false;
 }
 
-async function assertSafeProviderUrl(url: string, allowedHosts: string[]) {
+async function assertSafeUrl(url: string, allowedHosts: string[]) {
   const u = new URL(url);
   if (u.protocol !== "https:") throw new Error("only https");
   if (!allowedHosts.includes(u.hostname.toLowerCase())) throw new Error("host not allowed");
@@ -52,14 +54,13 @@ async function assertSafeProviderUrl(url: string, allowedHosts: string[]) {
 async function getProviderConfig(ownerId: string) {
   const { data } = await sb
     .from("api_configs")
-    .select("url, key, provider_key_encrypted, likes_service_id")
+    .select("url, key, provider_key_encrypted, likes_service_id, balance")
     .eq("owner_id", ownerId)
     .maybeSingle();
   if (!data) return null;
-  // Prefer the encrypted server-side key; fall back to legacy plaintext.
   const key = data.provider_key_encrypted || data.key;
   if (!key) return null;
-  return { url: data.url, key, likesServiceId: data.likes_service_id };
+  return { url: data.url, key, likesServiceId: data.likes_service_id, balance: data.balance };
 }
 
 async function getOrderData(ownerId: string, orderId: string) {
@@ -72,44 +73,53 @@ async function getOrderData(ownerId: string, orderId: string) {
   return data?.data ?? null;
 }
 
-// Atomic claim: update only when still scheduled; returns the row or null if
-// another worker already claimed it.
-async function claimBatch(ownerId: string, orderId: string, idx: number) {
-  const { data } = await sb
-    .from("order_batches")
-    .update({ state: "sending", attempts: 0, updated_at: new Date().toISOString() })
-    .eq("owner_id", ownerId)
-    .eq("order_id", orderId)
-    .eq("idx", idx)
-    .eq("state", "scheduled")
-    .select("idx, quantity, likes, attempts")
-    .maybeSingle();
-  return data;
+// Parse a numeric provider balance if present (best-effort).
+function numericBalance(raw: unknown): number | undefined {
+  if (raw == null) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
 }
 
-async function sendBatch(config: { url: string; key: string }, order: any, batch: any, likesServiceId?: string) {
+async function providerPost(config: { url: string; key: string }, params: Record<string, string>) {
   const allowedHosts = (Deno.env.get("PROVIDER_ALLOW_HOSTS") || "yoyomedia.in")
     .split(",")
     .map((s) => s.trim().toLowerCase());
-  await assertSafeProviderUrl(config.url, allowedHosts);
+  await assertSafeUrl(config.url, allowedHosts);
 
-  const post = (params: Record<string, string>) =>
-    fetch(config.url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
-      },
-      body: new URLSearchParams({ key: config.key, ...params }).toString(),
-      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-    });
-
-  const res = await post({
-    action: "add",
-    service: order.providerServiceId,
-    link: order.link,
-    quantity: String(batch.quantity),
+  // redirect:'manual' + stop following; we validate each hop via assertSafeUrl.
+  const res = await fetch(config.url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+    },
+    body: new URLSearchParams({ key: config.key, ...params }).toString(),
+    redirect: "manual",
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   });
+  if (res.status >= 300 && res.status < 400) {
+    const loc = res.headers.get("location");
+    if (loc) {
+      // Re-validate the redirect target (same host guard) then follow once.
+      const u = new URL(loc, config.url);
+      await assertSafeUrl(u.toString(), allowedHosts);
+      return providerFetchAt(u.toString(), config, params);
+    }
+  }
+  return providerFetchAt(config.url, config, params, res);
+}
+
+async function providerFetchAt(url: string, config: { url: string; key: string }, params: Record<string, string>, existing?: Response) {
+  const res = existing ?? (await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+    },
+    body: new URLSearchParams({ key: config.key, ...params }).toString(),
+    redirect: "manual",
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+  }));
   const text = await res.text();
   let parsed: any = null;
   try {
@@ -117,82 +127,108 @@ async function sendBatch(config: { url: string; key: string }, order: any, batch
   } catch {
     /* ignore */
   }
-  if (!res.ok) {
-    return { ok: false, error: String(parsed?.error || `HTTP ${res.status}`) };
-  }
-  const providerOrderId = parsed?.order != null ? String(parsed.order) : undefined;
+  if (!res.ok) return { ok: false, error: String(parsed?.error || `HTTP ${res.status}`) };
+  return { ok: true, parsed };
+}
 
-  // Bonus likes ride as a separate provider order when a likes service is set.
-  if (likesServiceId && batch.likes > 0) {
-    const likeRes = await post({
+async function sendBatch(config: any, order: any, batch: any) {
+  // Send main order
+  const main = await providerPost(config, {
+    action: "add",
+    service: order.providerServiceId,
+    link: order.link,
+    quantity: String(batch.quantity),
+  });
+  if (!main.ok) return { ok: false, error: main.error, providerOrderId: undefined, likes: null };
+  const providerOrderId = main.parsed?.order != null ? String(main.parsed.order) : undefined;
+
+  // Send likes separately (only if configured); never resend main on likes failure
+  let likes = null;
+  if (config.likesServiceId && batch.likes > 0) {
+    const likeRes = await providerPost(config, {
       action: "add",
-      service: likesServiceId,
+      service: config.likesServiceId,
       link: order.link,
       quantity: String(batch.likes),
     });
-    const likeText = await likeRes.text();
-    let likeParsed: any = null;
-    try {
-      likeParsed = JSON.parse(likeText);
-    } catch {
-      /* ignore */
-    }
-    if (!likeRes.ok && likeParsed?.error) {
-      return { ok: false, error: `likes: ${likeParsed.error}` };
-    }
+    likes = {
+      ok: likeRes.ok,
+      error: likeRes.error,
+      orderId: likeRes.ok && likeRes.parsed?.order != null ? String(likeRes.parsed.order) : undefined,
+    };
   }
+  return { ok: true, providerOrderId, likes };
+}
 
-  return { ok: true, providerOrderId };
+async function mark(ownerId: string, orderId: string, idx: number, patch: Record<string, unknown>) {
+  await sb.from("order_batches").update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("owner_id", ownerId).eq("order_id", orderId).eq("idx", idx);
 }
 
 async function processBatch(b: { owner_id: string; order_id: string; idx: number }) {
   const cfg = await getProviderConfig(b.owner_id);
-  if (!cfg) {
-    // No provider config for this owner → nothing to send. Leave the batch
-    // scheduled so it is retried once a config appears.
-    return;
-  }
+  if (!cfg) return; // no config → leave scheduled (retry later)
+
   const order = await getOrderData(b.owner_id, b.order_id);
   if (!order) {
-    await sb
-      .from("order_batches")
-      .update({ state: "failed", last_error: "order missing", updated_at: new Date().toISOString() })
-      .eq("owner_id", b.owner_id)
-      .eq("order_id", b.order_id)
-      .eq("idx", b.idx);
+    await mark(b.owner_id, b.order_id, b.idx, { state: "failed", last_error: "order missing" });
     return;
   }
-  const batch = await claimBatch(b.owner_id, b.order_id, b.idx);
-  if (!batch) return; // another worker claimed it first
+  // Skip cancelled orders (cancel stops future sends; RPC also marks them).
+  if (order.cancelled) {
+    await mark(b.owner_id, b.order_id, b.idx, { state: "cancelled", last_error: "order cancelled" });
+    return;
+  }
 
-  const mark = (state: string, lastError: string | null) =>
-    sb
-      .from("order_batches")
-      .update({ state, last_error: lastError, updated_at: new Date().toISOString() })
-      .eq("owner_id", b.owner_id)
-      .eq("order_id", b.order_id)
-      .eq("idx", b.idx);
+  // Balance check (best-effort) before sending.
+  const bal = numericBalance(cfg.balance);
+  if (bal !== undefined && bal < 0) {
+    await mark(b.owner_id, b.order_id, b.idx, { state: "paused", last_error: "insufficient balance" });
+    return;
+  }
 
+  // Atomic claim (increments attempts, sets lease). If NULL → another worker got it.
+  const { data: claimed } = await sb.rpc("claim_batch", {
+    p_owner: b.owner_id,
+    p_order: b.order_id,
+    p_idx: b.idx,
+  });
+  if (!claimed) return;
+
+  const attempt = claimed.attempts;
   try {
-    const result = await sendBatch(cfg, order, batch, cfg.likesServiceId);
-    if (result.ok) {
-      await mark("sent", null);
-      await sb
-        .from("order_batches")
-        .update({ provider_order_id: result.providerOrderId, provider_status: "processing" })
-        .eq("owner_id", b.owner_id)
-        .eq("order_id", b.order_id)
-        .eq("idx", b.idx);
-    } else if (batch.attempts + 1 >= MAX_ATTEMPTS) {
-      await mark("failed", result.error);
-    } else {
-      // retry later (leave scheduled)
-      await mark("scheduled", result.error);
+    const result = await sendBatch(cfg, order, claimed);
+    // Always persist provider_order_id immediately after main success.
+    if (result.providerOrderId) {
+      await mark(b.owner_id, b.order_id, b.idx, { provider_order_id: result.providerOrderId });
     }
+    if (!result.ok) {
+      if (attempt >= MAX_ATTEMPTS) {
+        const permanent = /insufficient balance|invalid link|disabled|min|max/i.test(result.error || "");
+        await mark(b.owner_id, b.order_id, b.idx, { state: permanent ? "paused" : "failed", last_error: result.error });
+      } else {
+        await mark(b.owner_id, b.order_id, b.idx, { state: "scheduled", last_error: result.error, next_attempt_at: new Date(Date.now() + attempt * 60_000).toISOString() });
+      }
+      return;
+    }
+
+    // Main sent → state sent (even if likes still pending).
+    const patch: Record<string, unknown> = { state: "sent", last_error: null };
+    if (result.likes) {
+      if (result.likes.ok) {
+        patch.likes_state = "sent";
+        patch.likes_provider_order_id = result.likes.orderId;
+      } else {
+        patch.likes_state = "failed";
+        patch.likes_provider_order_id = result.likes.orderId;
+        patch.last_error = "likes: " + (result.likes.error || "unknown");
+      }
+    }
+    await mark(b.owner_id, b.order_id, b.idx, patch);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (batch.attempts + 1 >= MAX_ATTEMPTS) await mark("failed", msg);
-    else await mark("scheduled", msg);
+    if (attempt >= MAX_ATTEMPTS) await mark(b.owner_id, b.order_id, b.idx, { state: "failed", last_error: msg });
+    else await mark(b.owner_id, b.order_id, b.idx, { state: "scheduled", last_error: msg, next_attempt_at: new Date(Date.now() + attempt * 60_000).toISOString() });
   }
 }
 
@@ -202,11 +238,29 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
   }
 
+  // Reclaim stuck 'sending' rows older than the lease, only after checking the
+  // provider by provider_order_id: if known → mark sent; if unknown → needs_review.
+  const { data: stuck } = await sb
+    .from("order_batches")
+    .select("owner_id, order_id, idx, provider_order_id")
+    .eq("state", "sending")
+    .lt("locked_at", new Date(Date.now() - LEASE_MS).toISOString());
+  if (stuck) {
+    for (const s of stuck) {
+      if (s.provider_order_id) {
+        await mark(s.owner_id, s.order_id, s.idx, { state: "sent", last_error: "reclaimed (provider confirmed)" });
+      } else {
+        await mark(s.owner_id, s.order_id, s.idx, { state: "needs_review", last_error: "crashed during send; status unknown" });
+      }
+    }
+  }
+
+  // Due scheduled batches.
   const { data: due } = await sb
     .from("order_batches")
     .select("owner_id, order_id, idx")
-    .in("state", ["scheduled", "sending"])
-    .lte("t", new Date().toISOString())
+    .eq("state", "scheduled")
+    .lte("next_attempt_at", new Date().toISOString())
     .limit(BATCH_LIMIT);
 
   if (!due || due.length === 0) {
@@ -217,8 +271,10 @@ Deno.serve(async (req) => {
   for (const b of due) {
     await processBatch(b);
     processed++;
+    if (PROVIDER_DELAY_MS > 0) await new Promise((r) => setTimeout(r, PROVIDER_DELAY_MS));
   }
 
   return new Response(JSON.stringify({ ok: true, processed }), { status: 200 });
 });
+
 

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chargeFor, newOrderId, schedule, mergeToMin } from "../lib/engine";
-import type { NightMode, SpeedProfile } from "../lib/engine";
+import type { NightMode, Order, SpeedProfile } from "../lib/engine";
 import { addOrder, useApiCfg, useServices } from "../lib/store";
 import { isDispatchReady } from "../lib/supabase";
 import { cloudWriteBatches } from "../lib/cloud";
@@ -74,8 +74,8 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   }, [categories, category, service, serviceId]);
 
   const charge = service ? Math.round(chargeFor(service, Number(quantity) || 0, Number(likes) || 0) * 100) / 100 : 0;
-  // Bonus-likes can only be used when a provider key AND a likes service id are
-  // configured (R1). Otherwise the field is disabled.
+  // Bonus-likes can only be sent when a provider key AND a likes service id are
+  // configured. Otherwise the field is disabled.
   const likesDisabled = !(apiCfg.key && apiCfg.key.trim().length >= 4) || !apiCfg.likesServiceId;
 
   const previewOrder = {
@@ -121,7 +121,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
 
     const createdAt = startTime ? new Date(startTime).getTime() : Date.now();
     if (Number.isNaN(createdAt)) return setError("Start time sahi nahi hai.");
-    const order = {
+    const order: Order = {
       id: newOrderId(),
       serviceId: service.id,
       serviceName: service.name,
@@ -142,8 +142,8 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     };
 
     // Provider mode requires BOTH a provider key AND the dispatcher pipeline
-    // being live (isDispatchReady). Until Auth/migrations/Edge Function are
-    // deployed, orders always run in simulation mode and the UI says so.
+    // being live (isDispatchReady). Until Auth/Edge Function are deployed, orders
+    // fall back to simulation mode.
     const providerConfigured = !!(apiCfg.key && apiCfg.key.trim().length >= 4);
     const dispatchReady = isDispatchReady();
     const batchMode = providerConfigured && dispatchReady;

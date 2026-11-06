@@ -15,21 +15,6 @@ const PORT = Number(process.env.PORT) || 8080;
 const DIST = join(__dirname, "dist");
 const DATA_DIR = join(__dirname, "data");
 const engine = createEngine({ dir: DATA_DIR });
-// Optional shared-secret auth for /api/*. If set, requests must carry it in the
-// X-Panel-Secret header. Real per-user auth is provided by Supabase Auth (S2);
-// this is a local-server gate, not a substitute for it.
-const SERVER_SECRET = process.env.PANEL_SERVER_SECRET || "";
-
-function requireSecret(req, res) {
-  if (!SERVER_SECRET) return true; // no secret configured → open (local dev)
-  const provided = String(req.headers["x-panel-secret"] || "");
-  if (provided !== SERVER_SECRET) {
-    res.writeHead(401, { "Content-Type": "application/json; charset=utf-8" });
-    res.end(JSON.stringify({ error: "Unauthorized" }));
-    return false;
-  }
-  return true;
-}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {
@@ -67,7 +52,6 @@ const MIME = {
 const server = createServer(async (req, res) => {
   // ---- SMM API proxy ---- (guarded: allowlist + DNS/private-IP + timeout + cap)
   if (req.method === "POST" && req.url.startsWith("/api/smm")) {
-    if (!requireSecret(req, res)) return;
     let body = "";
     try {
       body = await readBody(req);
@@ -106,7 +90,6 @@ const server = createServer(async (req, res) => {
 
   // ---- Orders API (server-side delivery engine) ---- (gated + validated)
   if (req.url.startsWith("/api/orders")) {
-    if (!requireSecret(req, res)) return;
     if (req.method === "GET") {
       engine.advance(Date.now());
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -208,7 +191,7 @@ const server = createServer(async (req, res) => {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy":
-      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:; font-src 'self' data:",
+      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss://*.supabase.co; font-src 'self' data:",
     "Cache-Control": isAsset ? "public, max-age=31536000, immutable" : "no-cache",
   };
 

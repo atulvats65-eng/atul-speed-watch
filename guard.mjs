@@ -79,8 +79,10 @@ export async function assertSafeTarget(urlStr, { allowlist } = {}) {
 }
 
 // Forward a request to `url`, re-validating each redirect hop. Returns
-// { status, headers, body(Buffer) }. Throws on SSRF/timeout/oversize/redirects.
-export async function forwardFetch(url, { method = "POST", headers = {}, body = "", allowlist = null } = {}) {
+// { status, headers, body(Buffer), truncated }. Throws on SSRF/timeout/redirects.
+// With `allowTruncate` the response is read up to MAX_BODY and sliced instead of
+// failing (used by the OG preview, whose HTML can exceed 1 MB).
+export async function forwardFetch(url, { method = "POST", headers = {}, body = "", allowlist = null, allowTruncate = false } = {}) {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const safe = await assertSafeTarget(current, { allowlist });
@@ -100,8 +102,13 @@ export async function forwardFetch(url, { method = "POST", headers = {}, body = 
     }
 
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > MAX_BODY) throw new Error("Upstream response too large");
-    return { status: res.status, headers: res.headers, body: buf };
+    if (buf.length > MAX_BODY) {
+      if (allowTruncate) {
+        return { status: res.status, headers: res.headers, body: buf.subarray(0, MAX_BODY), truncated: true };
+      }
+      throw new Error("Upstream response too large");
+    }
+    return { status: res.status, headers: res.headers, body: buf, truncated: false };
   }
   throw new Error("Too many redirects");
 }

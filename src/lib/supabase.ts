@@ -9,11 +9,9 @@ export function isSupabaseReady(): boolean {
   return Boolean(url && anonKey);
 }
 
-// The server-side provider dispatcher (Supabase Edge Function + pg_cron + the
-// owner-RLS migration) is an opt-in, separately-deployed feature. Until the
-// operator sets VITE_DISPATCH_READY=true, orders always run in simulation mode
-// and the UI must say so. This keeps the panel working even when only the base
-// schema / localStorage are present.
+// The server-side provider dispatcher (Supabase Edge Function + pg_cron) is an
+// opt-in, separately-deployed feature. Until the operator sets
+// VITE_DISPATCH_READY=true, orders run in simulation mode.
 export function isDispatchReady(): boolean {
   return isSupabaseReady() && import.meta.env.VITE_DISPATCH_READY === "true";
 }

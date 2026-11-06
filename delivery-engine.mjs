@@ -62,69 +62,67 @@ function profileParams(o) {
 }
 
 const SCURVE_PER_1000 = 15 * 60_000;
-const SCURVE_MIN = 8 * 60_000;
+const SCURVE_MIN = 30 * 60_000; // minimum S-curve window (R1)
 const SCURVE_MAX = 6 * 3600_000;
 const SCURVE_STEEP = 12;
 
-// S-Curve delivery: cumulative delivered follows a sigmoid — slow ramp-up,
-// fast mid-section, then a tapering tail.
+// S-Curve delivery: cumulative delivered follows a sigmoid (slow ramp-up, fast
+// middle, tapering tail). No per-tick floor — small increments are accumulated
+// and released only when they reach minBatch (~1% of q, capped 1..100). The
+// first drop is ~minBatch at +60s, and the last tick lands exactly on q.
+// Mirrors src/lib/engine.ts sCurveSchedule exactly (E4).
 function sCurveSchedule(o) {
-  const quantity = o.quantity;
-  const duration = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (quantity / 1000) * SCURVE_PER_1000));
-  const n = Math.max(12, Math.min(120, Math.floor(duration / (5 * 60_000))));
+  const q = o.quantity;
+  const duration = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
+  const n = Math.min(120, Math.max(12, Math.round(q / 120), Math.floor(duration / (2 * 60_000))));
   const raw = (x) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
   const r1 = raw(1);
   const frac = (x) => (raw(x) - r0) / (r1 - r0);
+  const minBatch = Math.min(100, Math.max(1, Math.round(q * 0.01)));
 
   const ticks = [];
-  let prev = 0;
-
-  let firstTarget = Math.max(1, Math.round(quantity * 0.015));
-  firstTarget = Math.min(MAX_DROP, Math.max(FLOOR_SCURVE, firstTarget));
-  prev += firstTarget;
+  const firstAmount = Math.min(minBatch, q);
+  let prev = firstAmount;
   ticks.push({
     t: o.createdAt + 60_000,
-    amount: firstTarget,
-    likes: Math.round((firstTarget / quantity) * (o.likes || 0)),
-    cumulative: Math.min(prev, quantity),
+    amount: firstAmount,
+    likes: Math.round((firstAmount / q) * (o.likes || 0)),
+    cumulative: firstAmount,
   });
+  if (prev >= q) return ticks;
 
+  let acc = 0;
+  let accLikes = 0;
   for (let i = 1; i <= n; i++) {
     const x = i / n;
-    const target = Math.round(frac(x) * quantity);
+    const target = Math.round(frac(x) * q);
     if (target <= prev) continue;
-    const amount = target - prev;
-    if (amount <= 0) continue;
+    const inc = target - prev;
+    prev = target;
+    acc += inc;
+    accLikes += Math.round((inc / q) * (o.likes || 0));
+    if (acc < minBatch) continue;
     const t = o.createdAt + Math.round(x * duration);
-    const nightSlow = o.night === "slow" && isNight(t) ? 0.5 : 1;
-    const drop = Math.max(FLOOR_SCURVE, Math.round(amount * nightSlow));
-    const capped = Math.min(drop, quantity - prev);
-    if (capped <= 0) break;
-    prev += capped;
-    ticks.push({
-      t,
-      amount: capped,
-      likes: Math.round((capped / quantity) * (o.likes || 0)),
-      cumulative: Math.min(prev, quantity),
-    });
-    if (prev >= quantity) break;
+    ticks.push({ t, amount: acc, likes: accLikes, cumulative: prev });
+    acc = 0;
+    accLikes = 0;
+    if (prev >= q) break;
   }
 
-  if (prev < quantity && ticks.length > 0) {
-    const last = ticks[ticks.length - 1];
-    last.amount += quantity - prev;
-    last.cumulative = quantity;
-  } else if (prev < quantity) {
-    ticks.push({
-      t: o.createdAt + duration,
-      amount: quantity - prev,
-      likes: Math.round(((quantity - prev) / quantity) * (o.likes || 0)),
-      cumulative: quantity,
-    });
+  const delivered = ticks.length ? ticks[ticks.length - 1].cumulative : 0;
+  const leftover = q - delivered;
+  if (leftover > 0) {
+    if (ticks.length > 0) {
+      const last = ticks[ticks.length - 1];
+      last.amount += leftover;
+      last.likes += Math.round((leftover / q) * (o.likes || 0));
+      last.cumulative = q;
+    } else {
+      ticks.push({ t: o.createdAt + 60_000, amount: q, likes: o.likes || 0, cumulative: q });
+    }
   }
-
-  if (ticks.length > 0) ticks[ticks.length - 1].cumulative = quantity;
+  if (ticks.length > 0) ticks[ticks.length - 1].cumulative = q;
   return ticks;
 }
 

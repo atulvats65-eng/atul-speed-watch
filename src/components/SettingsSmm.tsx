@@ -14,6 +14,7 @@ export default function SettingsSmm() {
   const [key, setKey] = useState(saved.key);
   const [backupUrl, setBackupUrl] = useState(saved.backupUrl);
   const [backupKey, setBackupKey] = useState(saved.backupKey);
+  const [likesSvc, setLikesSvc] = useState(saved.likesServiceId ?? "");
   const [busy, setBusy] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
 
@@ -23,6 +24,7 @@ export default function SettingsSmm() {
       key: key.trim(),
       backupUrl: withBackup ? backupUrl.trim() : "",
       backupKey: withBackup ? backupKey.trim() : "",
+      likesServiceId: likesSvc.trim() || undefined,
     });
     toast("API config save ho gayi.");
   };
@@ -122,6 +124,12 @@ export default function SettingsSmm() {
           </Field>
           <Field label="Backup Key (optional)">
             <Input type="password" placeholder="••••••••" value={backupKey} onChange={(e) => setBackupKey(e.target.value)} />
+          </Field>
+          <Field label="Likes Service ID (optional — bonus likes)">
+            <Input placeholder="Provider likes service id" value={likesSvc} onChange={(e) => setLikesSvc(e.target.value)} />
+            <p className="mt-1 text-xs text-slate-400">
+              Isse set karo to New Order me Bonus likes use ho sakta hai (provider mode me).
+            </p>
           </Field>
         </div>
 

@@ -104,22 +104,7 @@ export function parseBalance(data: unknown): BalanceInfo {
   return { text, currency: cur || (isUsd ? "USD" : "INR"), value: b };
 }
 
-// Place a real order with the SMM provider (action=add). Returns the provider's
-// order id when it succeeds, so the local order can reference the real one.
-export type PlaceOrderResult = { ok: boolean; orderId?: string; error?: string };
+// NOTE: Provider order placement (action=add) is done ONLY by the server-side
+// dispatcher (Supabase Edge Function). The browser must never send the provider
+// key or place orders directly (S3/S6/R1).
 
-export async function providerPlaceOrder(
-  baseUrl: string,
-  key: string,
-  opts: { service: string; link: string; quantity: number },
-): Promise<PlaceOrderResult> {
-  const r = await providerCall(baseUrl, key, "add", {
-    service: opts.service,
-    link: opts.link,
-    quantity: String(opts.quantity),
-  });
-  if (!r.ok) return { ok: false, error: r.error };
-  const d = r.data as { order?: string | number } | null;
-  const orderId = d?.order != null ? String(d.order) : undefined;
-  return { ok: true, orderId };
-}

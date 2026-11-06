@@ -27,14 +27,11 @@ import {
   cloudWriteUsers,
 } from "../lib/cloud";
 import { cloudPushOrders } from "../lib/cloud";
-import { remoteFetchOrders, remoteProbe } from "../lib/remote";
 
 /**
  * When Supabase is configured, uploads the current local state once, then
  * subscribes to realtime so that changes made on other devices / sessions are
  * merged back into localStorage (and thus into the reactive store).
- * Also pulls orders from the server-side delivery engine (when the app is
- * served by server.mjs) so server-advanced progress is reflected.
  */
 export default function CloudSync() {
   const session = useSession();
@@ -43,8 +40,8 @@ export default function CloudSync() {
     if (!isSupabaseReady()) return;
 
     // Re-validate the current session every mount: if the key was disabled or
-    // expired (locally or on the cloud), log the user out immediately.
-    if (session?.key && session.key.toUpperCase() !== "ATUL-ADMIN") {
+    // expired, log the user out immediately.
+    if (session?.key) {
       const u = getUsers()[session.key];
       if (u && (!u.active || isKeyExpired(u))) {
         signOut();
@@ -71,17 +68,6 @@ export default function CloudSync() {
       cloudWatchServices(applyCloudServices),
       cloudWatchApiCfg(applyCloudApiCfg),
     ];
-
-    // Pull server-side delivery engine progress when the app is served by
-    // server.mjs (Dev unused before; now actually used).
-    remoteProbe().then((avail) => {
-      if (!avail) return;
-      return remoteFetchOrders().then((remoteOrders) => {
-        if (remoteOrders && Array.isArray(remoteOrders) && remoteOrders.length > 0) {
-          applyCloudOrders(remoteOrders);
-        }
-      });
-    });
 
     return () => {
       offs.forEach((off) => off && off());
