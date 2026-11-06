@@ -2,6 +2,8 @@
 // thumbnail (og:image) + title (account/post name). Browsers can't do this
 // directly (CORS), so we proxy it like the SMM endpoint.
 
+import { forwardFetch } from "../guard.mjs";
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -27,16 +29,18 @@ export default async function handler(req, res) {
   }
 
   try {
-    const upstream = await fetch(url, {
+    // allowlist:false → OG preview may fetch arbitrary https URLs, but still gets
+    // DNS/private-IP, redirect-revalidation, timeout and size-cap protection.
+    const upstream = await forwardFetch(url, {
       method: "GET",
+      allowlist: false,
       headers: {
         "User-Agent": UA,
         Accept: "text/html,application/xhtml+xml,*/*",
         "Accept-Language": "en-US,en;q=0.9",
       },
-      redirect: "follow",
     });
-    const html = await upstream.text();
+    const html = upstream.body.toString("utf8");
 
     const unescape = (s) => {
       try {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Card, Field, Input } from "./ui";
-import { signIn, signInGoogle } from "../lib/store";
+import { signIn, signInGoogle, hasLocalAdmin, createBootstrapAdmin } from "../lib/store";
 import { getSupabase, isSupabaseReady } from "../lib/supabase";
 
 export default function LoginScreen() {
@@ -8,6 +8,15 @@ export default function LoginScreen() {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [bootstrapKey, setBootstrapKey] = useState<string | null>(null);
+
+  // localStorage-only first run: create a one-time random admin key (shown once)
+  // instead of any hardcoded admin string.
+  useEffect(() => {
+    if (!isSupabaseReady() && !hasLocalAdmin()) {
+      setBootstrapKey(createBootstrapAdmin());
+    }
+  }, []);
 
   // If Supabase redirected back from Google OAuth, finalize the sign-in.
   useEffect(() => {
@@ -138,8 +147,19 @@ export default function LoginScreen() {
             Gmail se login karein
           </Button>
 
+          {bootstrapKey && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs">
+              <div className="font-semibold text-amber-800">
+                Pehli baar? Yeh aapki admin key hai (sirf ek baar dikhegi — kahi save kar lein)
+              </div>
+              <div className="mt-2 select-all break-all rounded-lg bg-white px-3 py-2 font-mono text-sm font-semibold text-slate-900 ring-1 ring-amber-200">
+                {bootstrapKey}
+              </div>
+            </div>
+          )}
+
           <p className="text-center text-xs text-slate-400">
-            Access key admin se lo · <span className="font-medium text-slate-600">ATUL-ADMIN</span> = admin
+            Access key admin se lo — admin key pehli baar khud ban jaati hai.
           </p>
         </div>
       </Card>

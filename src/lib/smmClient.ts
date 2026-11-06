@@ -53,28 +53,8 @@ export async function providerCall(
         body,
         signal: ctrl.signal,
       });
-      // If the proxy is missing (e.g. raw vite dev without server.mjs), fall
-      // back to a direct call so connect still works.
-      if (!res.ok && res.status === 404) {
-        const direct = await fetch(target, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          },
-          body,
-          signal: ctrl.signal,
-        });
-        const t = await direct.text();
-        let d: unknown = null;
-        try {
-          d = JSON.parse(t);
-        } catch {
-          /* ignore */
-        }
-        return { ok: direct.ok, status: direct.status, data: d, targetUsed: target };
-      }
+      // No direct-browser fallback: the proxy is the only path to the provider so
+      // the provider API key never leaves the server side (S3/S6).
       const text = await res.text();
       let data: unknown = null;
       let error: string | undefined = undefined;

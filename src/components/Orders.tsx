@@ -262,7 +262,7 @@ export default function Orders() {
                   Set time
                 </GhostButton>
                 {p.status === "in progress" && (
-                  <GhostButton onClick={() => updateOrder(o.id, { cancelled: true })}>Cancel</GhostButton>
+                  <GhostButton onClick={() => updateOrder(o.id, { cancelled: true, cancelledAt: Date.now() })}>Cancel</GhostButton>
                 )}
                 <GhostButton className="text-red-600 hover:bg-red-50" onClick={() => deleteOrder(o.id)}>
                   Delete

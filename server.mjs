@@ -4,16 +4,50 @@
 //   SMM provider does not send CORS headers and blocks direct browser calls.
 // Zero runtime dependencies (uses only Node built-ins + global fetch).
 import { createServer } from "node:http";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { extname, join, normalize, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createEngine } from "./delivery-engine.mjs";
+import { forwardFetch, MAX_BODY } from "./guard.mjs";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const PORT = Number(process.env.PORT) || 8080;
 const DIST = join(__dirname, "dist");
 const DATA_DIR = join(__dirname, "data");
 const engine = createEngine({ dir: DATA_DIR });
+// Optional shared-secret auth for /api/*. If set, requests must carry it in the
+// X-Panel-Secret header. Real per-user auth is provided by Supabase Auth (S2);
+// this is a local-server gate, not a substitute for it.
+const SERVER_SECRET = process.env.PANEL_SERVER_SECRET || "";
+
+function requireSecret(req, res) {
+  if (!SERVER_SECRET) return true; // no secret configured → open (local dev)
+  const provided = String(req.headers["x-panel-secret"] || "");
+  if (provided !== SERVER_SECRET) {
+    res.writeHead(401, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "Unauthorized" }));
+    return false;
+  }
+  return true;
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > MAX_BODY) {
+        reject(new Error("Body too large"));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8",
@@ -30,18 +64,18 @@ const MIME = {
   ".woff2": "font/woff2",
 };
 
-function readBody(req) {
-  return new Promise((resolve) => {
-    let data = "";
-    req.on("data", (c) => (data += c));
-    req.on("end", () => resolve(data));
-  });
-}
-
 const server = createServer(async (req, res) => {
-  // ---- SMM API proxy ----
+  // ---- SMM API proxy ---- (guarded: allowlist + DNS/private-IP + timeout + cap)
   if (req.method === "POST" && req.url.startsWith("/api/smm")) {
-    const body = await readBody(req);
+    if (!requireSecret(req, res)) return;
+    let body = "";
+    try {
+      body = await readBody(req);
+    } catch {
+      res.writeHead(413, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "Body too large" }));
+      return;
+    }
     const target = String(req.headers["x-target"] || "").trim();
     if (!target) {
       res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
@@ -49,9 +83,7 @@ const server = createServer(async (req, res) => {
       return;
     }
     try {
-      // Browser-like headers to avoid Cloudflare bot blocks (e.g. YoYo Media).
-      // The SMM provider rejects or 404s requests without a normal User-Agent.
-      const upstream = await fetch(target, {
+      const upstream = await forwardFetch(target, {
         method: "POST",
         headers: {
           "Content-Type": req.headers["content-type"] || "application/x-www-form-urlencoded",
@@ -62,18 +94,19 @@ const server = createServer(async (req, res) => {
         },
         body,
       });
-      const text = await upstream.text();
       res.writeHead(upstream.status, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(text);
+      res.end(upstream.body);
     } catch (e) {
-      res.writeHead(502, { "Content-Type": "application/json; charset=utf-8" });
-      res.end(JSON.stringify({ error: "Proxy upstream error: " + (e instanceof Error ? e.message : String(e)) }));
+      const status = e instanceof TypeError && e.name === "TimeoutError" ? 504 : 502;
+      res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "Proxy error: " + (e instanceof Error ? e.message : String(e)) }));
     }
     return;
   }
 
-  // ---- Orders API (server-side delivery engine) ----
+  // ---- Orders API (server-side delivery engine) ---- (gated + validated)
   if (req.url.startsWith("/api/orders")) {
+    if (!requireSecret(req, res)) return;
     if (req.method === "GET") {
       engine.advance(Date.now());
       res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -81,19 +114,33 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (req.method === "POST") {
-      const body = await readBody(req);
+      let body = "";
+      try {
+        body = await readBody(req);
+      } catch {
+        res.writeHead(413, { "Content-Type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ error: "Body too large" }));
+        return;
+      }
       try {
         const order = JSON.parse(body);
-        if (!order || typeof order.id !== "string") {
+        if (
+          !order ||
+          typeof order.id !== "string" ||
+          typeof order.serviceName !== "string" ||
+          !Number.isFinite(order.quantity) ||
+          order.quantity <= 0 ||
+          typeof order.link !== "string"
+        ) {
           res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
-          res.end(JSON.stringify({ error: "Invalid order" }));
+          res.end(JSON.stringify({ error: "Invalid order body" }));
           return;
         }
         engine.upsert(order);
         engine.advance(Date.now());
         res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ ok: true, id: order.id }));
-      } catch (e) {
+      } catch {
         res.writeHead(400, { "Content-Type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ error: "Invalid JSON body" }));
       }
@@ -106,15 +153,15 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ ok: true, id }));
       return;
     }
-    res.writeHead(405);
-    res.end("Method not allowed");
+    res.writeHead(405, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
     return;
   }
 
-  // ---- Static files ----
+  // ---- Static files ---- (HEAD-safe, security headers, hashed-asset caching)
   if (req.method !== "GET" && req.method !== "HEAD") {
-    res.writeHead(405);
-    res.end("Method not allowed");
+    res.writeHead(405, { "Content-Type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ error: "Method not allowed" }));
     return;
   }
 
@@ -151,10 +198,26 @@ const server = createServer(async (req, res) => {
     res.end("Internal server error: missing file");
     return;
   }
-  res.writeHead(200, {
+
+  // Hashed assets (in /assets/, or index.html) can be cached aggressively; the
+  // rest gets a short no-cache default.
+  const isAsset = pathname.startsWith("/assets/");
+  const headers = {
     "Content-Type": MIME[ext] || "application/octet-stream",
     "Content-Length": content.length,
-  });
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy":
+      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https:; font-src 'self' data:",
+    "Cache-Control": isAsset ? "public, max-age=31536000, immutable" : "no-cache",
+  };
+
+  if (req.method === "HEAD") {
+    res.writeHead(200, headers);
+    res.end();
+    return;
+  }
+  res.writeHead(200, headers);
   res.end(content);
 });
 

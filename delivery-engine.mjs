@@ -419,7 +419,13 @@ export function computeProgress(o, now) {
   const done = ticks.filter((k) => k.t <= now);
   const cancelled = !!o.cancelled;
   const last = done[done.length - 1];
-  const delivered = cancelled ? 0 : Math.min(o.quantity, last ? last.cumulative : 0);
+  // Freeze delivered/likes at cancellation time instead of wiping to 0 (R2).
+  const cut = cancelled && o.cancelledAt ? o.cancelledAt : now;
+  const doneTicks = cancelled ? ticks.filter((k) => k.t <= cut) : done;
+  const lastDelivered = doneTicks[doneTicks.length - 1];
+  const delivered = cancelled
+    ? Math.min(o.quantity, lastDelivered ? lastDelivered.cumulative : 0)
+    : Math.min(o.quantity, last ? last.cumulative : 0);
   const status = cancelled
     ? "cancelled"
     : delivered >= o.quantity

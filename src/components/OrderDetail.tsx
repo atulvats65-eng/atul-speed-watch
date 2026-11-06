@@ -45,6 +45,7 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
     ["Service", o.serviceName],
     ["Link", o.link],
     ["Mode", `${pp.label} (${pp.minDrop}–${pp.maxDrop} / ${pp.minGap}–${pp.maxGap} min)`],
+    ...(o.simulated ? ([[ "Delivery", "Simulated — provider ko nahi ja raha" ]] as [string, string][]) : []),
     ...(o.night && o.night !== "none" ? ([[ "Night Shield", o.night === "pause" ? "🌙 Pause 12–6 AM" : "🌙 Slow 12–6 AM" ]] as [string, string][]) : []),
     ["Placed", fmtTime(o.createdAt)],
     ["Charge", `₹${o.charge.toFixed(2)}`],
@@ -63,7 +64,7 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
         <StatusBadge status={p.status} />
         <div className="ml-auto flex gap-2">
           {!o.cancelled && p.status !== "completed" && (
-            <Button className="bg-slate-200 text-xs text-slate-800 hover:bg-slate-300" onClick={() => updateOrder(o.id, { cancelled: true })}>
+            <Button className="bg-slate-200 text-xs text-slate-800 hover:bg-slate-300" onClick={() => updateOrder(o.id, { cancelled: true, cancelledAt: Date.now() })}>
               Cancel Order
             </Button>
           )}

@@ -116,6 +116,9 @@ export interface ApiCfg {
   key: string;
   backupUrl: string;
   backupKey: string;
+  /** Provider service id for bonus likes (R1). If unset, bonus-likes are
+   *  disabled because there is no likes service to send them to. */
+  likesServiceId?: string;
 }
 
 const K_API_CFG_BASE = "atul_api_cfg";
@@ -289,12 +292,9 @@ export function adminDeleteUser(key: string) {
 
 export async function signIn(key: string, name?: string): Promise<boolean> {
   const k = key.trim();
-  const admin = k.toUpperCase() === "ATUL-ADMIN";
-  if (admin) {
-    ensureUser({ key: k, admin: true, name: name?.trim() || "Admin" });
-    write(K_SESSION, { key: k, admin: true, name: name?.trim() || "Admin" });
-    return true;
-  }
+  // No hardcoded admin key. Admin role comes only from a stored/verified user
+  // record (cloud: server-verified role; local: the bootstrap admin or a key
+  // created with admin=true).
   // local check first
   const localUser = getUsers()[k];
   if (localUser) {
@@ -315,6 +315,22 @@ export async function signIn(key: string, name?: string): Promise<boolean> {
   // Only verified (admin-registered) keys open a panel. Each key has its own
   // isolated data. Use Gmail login if you don't have a verified key.
   return false;
+}
+
+export function hasLocalAdmin(): boolean {
+  return Object.values(getUsers()).some((u) => u.admin);
+}
+
+// localStorage-only mode bootstrap: generate a one-time random admin key (shown
+// once). It is never hardcoded and never printed on the login page.
+export function createBootstrapAdmin(name = "Admin"): string {
+  const buf = new Uint32Array(4);
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c?.getRandomValues) c.getRandomValues(buf);
+  else for (let i = 0; i < buf.length; i++) buf[i] = (Math.random() * 0xffffffff) >>> 0;
+  const key = "adm-" + Array.from(buf).map((n) => n.toString(36)).join("");
+  ensureUser({ key, admin: true, name });
+  return key;
 }
 
 export function signInGoogle(user: { uid: string; email?: string; displayName?: string }) {

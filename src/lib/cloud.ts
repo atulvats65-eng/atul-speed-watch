@@ -256,6 +256,7 @@ export function cloudWriteApiCfg(cfg: ApiCfg) {
       key: cfg.key,
       backup_url: cfg.backupUrl,
       backup_key: cfg.backupKey,
+      likes_service_id: cfg.likesServiceId || null,
       updated_at: iso(),
     },
     { onConflict: "owner_code" },
@@ -278,6 +279,7 @@ export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
           key: data.key || "",
           backupUrl: data.backup_url || "",
           backupKey: data.backup_key || "",
+          likesServiceId: data.likes_service_id || undefined,
         });
       });
   };
@@ -294,4 +296,32 @@ export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
     void sb.removeChannel(ch);
   };
 }
+// Write the provider batch plan (R1) into order_batches. This is only called
+// when the dispatcher pipeline is "ready" (isDispatchReady), i.e. the owner-RLS
+// migration + Supabase Auth + the Edge Function are deployed. It uses the real
+// auth uid as owner_id.
+export async function cloudWriteBatches(
+  orderId: string,
+  batches: { index: number; t: number; quantity: number; likes: number }[],
+): Promise<void> {
+  const sb = getSupabase();
+  if (!sb || !isSupabaseReady()) return;
+  const { data: user } = await sb.auth.getUser();
+  const uid = user?.user?.id;
+  if (!uid) return;
+  const rows = batches.map((b) => ({
+    owner_id: uid,
+    order_id: orderId,
+    idx: b.index,
+    t: new Date(b.t).toISOString(),
+    quantity: b.quantity,
+    likes: b.likes || 0,
+    state: "scheduled",
+    attempts: 0,
+    updated_at: new Date().toISOString(),
+  }));
+  if (rows.length === 0) return;
+  await sb.from("order_batches").upsert(rows, { onConflict: "owner_id,order_id,idx" });
+}
+
 

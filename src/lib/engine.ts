@@ -61,6 +61,9 @@ export interface Order {
   night?: NightMode;
   humanize?: boolean;
   cancelled?: boolean;
+  /** When the order was cancelled (ms epoch). Used to freeze delivered/likes at
+   *  that moment instead of wiping published to 0 (R2). */
+  cancelledAt?: number;
   /** Optional fixed completion window (ms from createdAt). When set, the order
    *  is scheduled to finish in exactly this time instead of using the profile's
    *  natural pace. */
@@ -68,6 +71,15 @@ export interface Order {
   /** Bot-safe "auto time": picks an unpredictable window and delivers with
    *  irregular, human-like timing so automation heuristics can't flag it. */
   autoHuman?: boolean;
+  /** Provider batch plan (R1). When set, the order is sent to the provider as
+   *  separate action=add batches by the server-side dispatcher. */
+  batches?: Batch[];
+  /** When true, the UI labels this order as "simulated" (no provider key). */
+  simulated?: boolean;
+  /** Provider service id used for action=add (svcId of the service). */
+  providerServiceId?: string;
+  /** Configured likes provider service id (if `likesServiceId` is set). */
+  likesServiceId?: string;
 }
 
 export function profileParams(o: Order): ProfileParams {
@@ -501,6 +513,53 @@ export function schedule(o: Order): Tick[] {
 
 export type Status = "pending" | "in progress" | "completed" | "cancelled";
 
+// A "batch" is one provider order (action=add) that the panel will send at time
+// `t`. Batches are produced from the schedule by merging small ticks up to the
+// provider's per-service minimum (mergeToMin).
+export interface Batch {
+  index: number;
+  t: number;
+  quantity: number;
+  likes: number;
+  state?: "scheduled" | "sending" | "sent" | "failed" | "cancelled";
+  providerOrderId?: string;
+  providerStatus?: string;
+  attempts?: number;
+  lastError?: string;
+}
+
+// Merge ticks into batches of at least `min` units (carry the remainder into the
+// next batch / final batch). Returns the full batch plan. The sum of batch
+// quantities always equals the sum of the input tick amounts.
+export function mergeToMin(ticks: Tick[], min: number): Batch[] {
+  const floor = Math.max(1, Math.floor(min));
+  const batches: Batch[] = [];
+  let acc = 0;
+  let accLikes = 0;
+  let firstT = 0;
+  for (const tk of ticks) {
+    if (acc === 0) firstT = tk.t;
+    acc += tk.amount;
+    accLikes += tk.likes;
+    if (acc >= floor) {
+      batches.push({ index: batches.length, t: firstT, quantity: acc, likes: accLikes });
+      acc = 0;
+      accLikes = 0;
+    }
+  }
+  if (acc > 0) {
+    if (batches.length > 0) {
+      const lastB = batches[batches.length - 1]!;
+      lastB.quantity += acc;
+      lastB.likes += accLikes;
+    } else {
+      batches.push({ index: 0, t: firstT, quantity: acc, likes: accLikes });
+    }
+  }
+  return batches;
+}
+
+
 export interface Progress {
   ticks: Tick[];
   done: Tick[];
@@ -518,13 +577,20 @@ export function progress(o: Order, now: number): Progress {
   const done = ticks.filter((k) => k.t <= now);
   const cancelled = !!o.cancelled;
   const last = done.at(-1);
-  const delivered = cancelled ? 0 : Math.min(o.quantity, last?.cumulative ?? 0);
-  const likes = cancelled ? 0 : last?.likes ?? 0;
+  // When cancelled, freeze delivered/likes at the moment of cancellation instead
+  // of wiping to 0 (R2). Future drops never happen.
+  const cut = cancelled && o.cancelledAt ? o.cancelledAt : now;
+  const doneTicks = cancelled ? ticks.filter((k) => k.t <= cut) : done;
+  const lastDelivered = doneTicks.at(-1);
+  const delivered = cancelled
+    ? Math.min(o.quantity, lastDelivered?.cumulative ?? 0)
+    : Math.min(o.quantity, last?.cumulative ?? 0);
+  const likes = cancelled ? (lastDelivered?.likes ?? 0) : last?.likes ?? 0;
   const status: Status = cancelled ? "cancelled" : delivered >= o.quantity ? "completed" : delivered === 0 ? "pending" : "in progress";
   return {
     ticks,
     done,
-    next: done.length < ticks.length ? ticks[done.length] : undefined,
+    next: cancelled ? undefined : done.length < ticks.length ? ticks[done.length] : undefined,
     delivered,
     likes,
     remains: o.quantity - delivered,
@@ -535,7 +601,10 @@ export function progress(o: Order, now: number): Progress {
 }
 
 export function newOrderId() {
-  return "AT" + Date.now().toString().slice(-7) + Math.floor(Math.random() * 90 + 10);
+  // crypto.randomUUID gives a collision-free id (E8). Keep a short human display.
+  const c = globalThis.crypto as Crypto | undefined;
+  const uuid = c?.randomUUID ? c.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return "AT" + uuid.replace(/-/g, "").slice(0, 10).toUpperCase();
 }
 
 export function chargeFor(service: Service, quantity: number, likes: number): number {

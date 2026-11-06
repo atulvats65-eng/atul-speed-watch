@@ -31,9 +31,11 @@ chalao:
 2. `supabase/schema.sql` ka pura content paste karo.
 3. **Run** dabao.
 
-> ⚠️ **Security note:** Ye shared panel hai, isliye read/write policies `true`
-> hain (koi bhi anon key se padh/likh sakta hai). Production ke liye ise
-> tighten karo — e.g. sirf admin user ko write allow karo.
+> ⚠️ **Security note:** The base `schema.sql` ships with **open** RLS policies
+> (`using (true)`) so the app works out of the box. **Do not rely on this for
+> production.** Apply `supabase/migration_owner_rls.sql` and enable Supabase
+> Auth **before** sharing the panel — otherwise anyone can read/edit every
+> user's rows (including SMM provider keys).
 
 ---
 
@@ -49,8 +51,11 @@ VITE_SUPABASE_ANON_KEY=...
 - `VITE_SUPABASE_URL` → Dashboard → **Settings → API → Project URL**
 - `VITE_SUPABASE_ANON_KEY` → **Settings → API → anon public key**
 
-> 🔑 Anon key **safe** hai browser ke liye (RLS policies hi access control
-> deti hain). Service role key **kabhi bhi** browser me mat daalo.
+> 🔑 The **anon key is not authorization** — it only identifies the project.
+> Access is controlled by RLS policies. With the base schema the policies are
+> open; you must apply the owner-RLS migration (Step 4b) so that only the row
+> owner (auth.uid()) can read/write their data. The service-role key must
+> **never** go in the browser.
 
 ---
 
@@ -63,6 +68,39 @@ Login page par **Gmail se login** Supabase Auth use karta hai.
 3. Google Cloud Console me OAuth Client ID + Secret banao aur yahan daalo
    (redirect URL Supabase dikhata hai — use wahi URL).
 4. Save karo.
+
+---
+
+## Step 4b — Security hardening (apply owner-RLS migration) ⭐
+
+Before sharing the panel, lock the database down:
+
+1. Enable **Supabase Auth** (Settings → Authentication → Providers → email OTP
+   and/or Google).
+2. Run `supabase/migration_owner_rls.sql` in the SQL Editor. It:
+   - adds `owner_id uuid default auth.uid()` and **owner-only RLS policies** to
+     `cloud_orders`, `services`, `transactions`, `api_configs`
+   - makes `access_keys` **unreadable by clients** and adds a security-definer
+     `redeem_key(code)` RPC (checks active/expired and links the key to the
+     calling user)
+   - changes `services`/`cloud_orders`/`transactions` primary keys to
+     per-owner composite keys `(owner_id, id)`
+   - keeps the raw SMM provider key server-side (client only sees a suffix)
+3. Create the `profiles` table entries (admin flag) via a server-side admin
+   script — **never** from the browser.
+
+> After this migration, the client sync layer must call `redeem_key` and use
+> `auth.uid()` as the owner. The remaining client work is covered in later
+> phases; do not rely on the open `schema.sql` policies for production.
+
+## Server-side secrets (used by server.mjs / api functions)
+
+- `PANEL_SERVER_SECRET` — shared secret for `/api/*` in Node server mode
+  (set it to protect `/api/orders` and the proxy).
+- `PROVIDER_ALLOW_HOSTS` — comma-separated allowlist of SMM provider hosts the
+  proxy may call (default includes `yoyomedia.in`). Everything else is rejected
+  (SSRF guard).
+- Provider SMM API keys are stored server-side only (see S2/S6).
 
 ---
 

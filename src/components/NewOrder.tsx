@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { chargeFor, newOrderId } from "../lib/engine";
+import { chargeFor, newOrderId, schedule, mergeToMin } from "../lib/engine";
 import type { NightMode, SpeedProfile } from "../lib/engine";
 import { addOrder, useApiCfg, useServices } from "../lib/store";
-import { providerPlaceOrder } from "../lib/smmClient";
+import { isDispatchReady } from "../lib/supabase";
+import { cloudWriteBatches } from "../lib/cloud";
 import { Button, Card, Field, Input, Select } from "./ui";
 import { toast } from "./Toast";
 import DeliveryCurveChart from "./DeliveryCurveChart";
@@ -73,6 +74,9 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   }, [categories, category, service, serviceId]);
 
   const charge = service ? Math.round(chargeFor(service, Number(quantity) || 0, Number(likes) || 0) * 100) / 100 : 0;
+  // Bonus-likes can only be used when a provider key AND a likes service id are
+  // configured (R1). Otherwise the field is disabled.
+  const likesDisabled = !(apiCfg.key && apiCfg.key.trim().length >= 4) || !apiCfg.likesServiceId;
 
   const previewOrder = {
     id: "preview",
@@ -137,30 +141,29 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       ...(autoHuman ? { autoHuman: true } : {}),
     };
 
-    addOrder(order);
-
-    // Best-effort: if an SMM API is configured, also place a real order with the
-    // provider (action=add). If it fails, the local simulated order is kept and
-    // we surface a warning — the panel still works as a simulator.
-    if (apiCfg.key && apiCfg.key.trim().length >= 4) {
-      const providerService = service.svcId || service.id;
-      const res = await providerPlaceOrder(apiCfg.url || "https://yoyomedia.in/api/v2", apiCfg.key, {
-        service: providerService,
-        link: link.trim(),
-        quantity: q,
-      });
-      if (res.ok) {
-        toast(`Order ${res.orderId ? `#${res.orderId} ` : ""}provider ko bhej diya.`);
-      } else {
-        toast(`Provider order fail: ${res.error ?? "unknown"} (simulation chalu)`, "error");
-      }
+    // Provider mode requires BOTH a provider key AND the dispatcher pipeline
+    // being live (isDispatchReady). Until Auth/migrations/Edge Function are
+    // deployed, orders always run in simulation mode and the UI says so.
+    const providerConfigured = !!(apiCfg.key && apiCfg.key.trim().length >= 4);
+    const dispatchReady = isDispatchReady();
+    const batchMode = providerConfigured && dispatchReady;
+    const likesEnabled = providerConfigured && !!apiCfg.likesServiceId;
+    order.likes = likesEnabled ? Number(likes) || 0 : 0;
+    order.simulated = !batchMode;
+    if (batchMode) {
+      order.providerServiceId = service.svcId || service.id;
+      if (likesEnabled) order.likesServiceId = apiCfg.likesServiceId;
+      const ticks = schedule(order);
+      order.batches = mergeToMin(ticks, service.min);
+      void cloudWriteBatches(order.id, order.batches);
+      toast(`${order.batches.length} batches scheduled — dispatcher bhejega.`);
+    } else if (providerConfigured) {
+      toast("Provider key set hai, lekin dispatcher abhi live nahi — simulated mode (provider ko nahi ja raha).");
     } else {
-      toast("Order place ho gaya! (simulation)");
-      onDone();
-      return;
+      toast("Order place ho gaya! (simulated — provider ko nahi ja raha)");
     }
 
-    toast("Order place ho gaya!");
+    addOrder(order);
     onDone();
   };
 
@@ -218,7 +221,17 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
             <Input type="number" value={quantity} onChange={(e) => setQuantity(Number(e.target.value))} />
           </Field>
           <Field label="Bonus likes (0 = koi nahi)">
-            <Input type="number" value={likes} onChange={(e) => setLikes(Number(e.target.value))} />
+            <Input
+              type="number"
+              value={likes}
+              disabled={likesDisabled}
+              onChange={(e) => setLikes(Number(e.target.value))}
+            />
+            {likesDisabled && (
+              <p className="mt-1 text-xs text-slate-400">
+                Bonus-likes ke liye provider me likes service configure karo (likesServiceId).
+              </p>
+            )}
           </Field>
         </div>
 
