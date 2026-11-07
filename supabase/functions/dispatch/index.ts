@@ -245,7 +245,8 @@ Deno.serve(async (req) => {
     .from("order_batches")
     .select("owner_code, order_id, idx")
     .eq("state", "scheduled")
-    .lte("next_attempt_at", new Date().toISOString())
+    .lte("t", new Date().toISOString()) // only when the batch's scheduled time has arrived
+    .lte("next_attempt_at", new Date().toISOString()) // and any retry backoff is due
     .limit(BATCH_LIMIT);
 
   if (!due || due.length === 0) {
