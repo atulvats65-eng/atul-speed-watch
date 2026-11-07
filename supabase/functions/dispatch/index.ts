@@ -16,7 +16,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SERVICE_ROLE_KEY = Deno.env.get("DISPATCH_SERVICE_KEY")!;
 const MAX_ATTEMPTS = Number(Deno.env.get("DISPATCH_MAX_ATTEMPTS") || 3);
 const LEASE_MS = Number(Deno.env.get("DISPATCH_LEASE_MS") || 5 * 60_000);
 const PROVIDER_TIMEOUT_MS = 10_000;
