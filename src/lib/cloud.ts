@@ -297,19 +297,20 @@ export function cloudWatchApiCfg(cb: (cfg: ApiCfg) => void) {
   };
 }
 
-// Write the provider batch plan into order_batches. Only called when the
-// dispatcher pipeline is live (isDispatchReady). Uses the auth uid as owner_id.
+
+
+// Write the provider batch plan into order_batches, namespaced by the access key
+// (owner_code) so it works with the key-login flow. Only called when the
+// dispatcher pipeline is live (isDispatchReady).
 export async function cloudWriteBatches(
   orderId: string,
+  ownerCode: string,
   batches: { index: number; t: number; quantity: number; likes: number }[],
 ): Promise<void> {
   const sb = getSupabase();
-  if (!sb || !isSupabaseReady()) return;
-  const { data: user } = await sb.auth.getUser();
-  const uid = user?.user?.id;
-  if (!uid) return;
+  if (!sb || !isSupabaseReady() || !ownerCode) return;
   const rows = batches.map((b) => ({
-    owner_id: uid,
+    owner_code: ownerCode,
     order_id: orderId,
     idx: b.index,
     t: new Date(b.t).toISOString(),
@@ -320,7 +321,6 @@ export async function cloudWriteBatches(
     updated_at: new Date().toISOString(),
   }));
   if (rows.length === 0) return;
-  await sb.from("order_batches").upsert(rows, { onConflict: "owner_id,order_id,idx" });
+  await sb.from("order_batches").upsert(rows, { onConflict: "owner_code,order_id,idx" });
 }
-
 

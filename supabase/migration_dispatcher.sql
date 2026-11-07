@@ -1,12 +1,13 @@
--- ATUL Speed Watch — dispatcher migration (provider delivery)
+-- ATUL Speed Watch — dispatcher migration (provider delivery, owner_code version)
 -- ---------------------------------------------------------------------------
--- order_batches: one row = one provider order (action=add) at time `t`.
--- Idempotency: attempts increments atomically on claim; provider_order_id is
--- written immediately after the main add succeeds; likes tracked separately.
--- A lease (lock_id/locked_at) prevents double-send if a worker crashes.
+-- order_batches is namespaced by the ACCESS KEY (owner_code), matching the
+-- key-login flow — no Supabase Auth required. One row = one provider order
+-- (action=add) at time `t`. Idempotency: attempts increments atomically on
+-- claim; provider_order_id is written immediately after the main add succeeds;
+-- likes tracked separately. A lease (lock_id/locked_at) avoids double-send.
 
 create table if not exists public.order_batches (
-  owner_id uuid not null default auth.uid(),
+  owner_code text not null,
   order_id text not null,
   idx int not null,
   t timestamptz not null,
@@ -23,22 +24,22 @@ create table if not exists public.order_batches (
   locked_at timestamptz,
   last_error text,
   updated_at timestamptz not null default now(),
-  primary key (owner_id, order_id, idx)
+  primary key (owner_code, order_id, idx)
 );
 
 alter table public.order_batches enable row level security;
 
-create policy "owner select order_batches" on public.order_batches for select using (owner_id = auth.uid());
-create policy "owner insert order_batches" on public.order_batches for insert with check (owner_id = auth.uid());
-create policy "owner update order_batches" on public.order_batches for update using (owner_id = auth.uid()) with check (owner_id = auth.uid());
-create policy "owner delete order_batches" on public.order_batches for delete using (owner_id = auth.uid());
+create policy "owner select order_batches" on public.order_batches for select using (true);
+create policy "owner insert order_batches" on public.order_batches for insert with check (true);
+create policy "owner update order_batches" on public.order_batches for update using (true) with check (true);
+create policy "owner delete order_batches" on public.order_batches for delete using (true);
 
 create index if not exists order_batches_due_idx on public.order_batches (state, next_attempt_at) where state in ('scheduled','sending');
 
--- Atomic claim: only claims if still scheduled and due; increments attempts and
+-- Atomic claim by owner_code: only claims if scheduled+due, increments attempts,
 -- sets a lease. Returns the row or NULL if another worker claimed it.
-create or replace function public.claim_batch(p_owner uuid, p_order text, p_idx int)
-returns table (owner_id uuid, order_id text, idx int, quantity int, likes int, attempts int)
+create or replace function public.claim_batch(p_owner text, p_order text, p_idx int)
+returns table (owner_code text, order_id text, idx int, quantity int, likes int, attempts int)
 language plpgsql
 security definer
 set search_path = public
@@ -52,20 +53,20 @@ begin
          lock_id = v_lease,
          locked_at = now(),
          updated_at = now()
-   where owner_id = p_owner and order_id = p_order and idx = p_idx
+   where owner_code = p_owner and order_id = p_order and idx = p_idx
      and state = 'scheduled'
      and next_attempt_at <= now();
   if not found then return; end if;
-  return query select b.owner_id, b.order_id, b.idx, b.quantity, b.likes, b.attempts
+  return query select b.owner_code, b.order_id, b.idx, b.quantity, b.likes, b.attempts
     from public.order_batches b
-   where b.owner_id = p_owner and b.order_id = p_order and b.idx = p_idx and b.lock_id = v_lease;
+   where b.owner_code = p_owner and b.order_id = p_order and b.idx = p_idx and b.lock_id = v_lease;
 end;
 $$;
-revoke all on function public.claim_batch(uuid,text,int) from public;
-grant execute on function public.claim_batch(uuid,text,int) to service_role;
+revoke all on function public.claim_batch(text,text,int) from public;
+grant execute on function public.claim_batch(text,text,int) to service_role, authenticated;
 
--- Cancel: mark all unsent batches of an order as cancelled (called when order is cancelled).
-create or replace function public.cancel_order_batches(p_owner uuid, p_order text)
+-- Cancel: mark all unsent batches of an order as cancelled.
+create or replace function public.cancel_order_batches(p_owner text, p_order text)
 returns void
 language plpgsql
 security definer
@@ -74,8 +75,8 @@ as $$
 begin
   update public.order_batches
      set state = 'cancelled', updated_at = now()
-   where owner_id = p_owner and order_id = p_order and state in ('scheduled','sending','paused');
+   where owner_code = p_owner and order_id = p_order and state in ('scheduled','sending','paused');
 end;
 $$;
-revoke all on function public.cancel_order_batches(uuid,text) from public;
-grant execute on function public.cancel_order_batches(uuid,text) to service_role;
+revoke all on function public.cancel_order_batches(text,text) from public;
+grant execute on function public.cancel_order_batches(text,text) to service_role, authenticated;

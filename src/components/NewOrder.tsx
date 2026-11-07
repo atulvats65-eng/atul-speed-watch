@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { chargeFor, newOrderId, schedule, mergeToMin } from "../lib/engine";
 import type { NightMode, Order, SpeedProfile } from "../lib/engine";
-import { addOrder, useApiCfg, useServices } from "../lib/store";
+import { addOrder, useApiCfg, useSession, useServices } from "../lib/store";
 import { isDispatchReady } from "../lib/supabase";
 import { cloudWriteBatches } from "../lib/cloud";
 import { Button, Card, Field, Input, Select } from "./ui";
@@ -10,6 +10,7 @@ import DeliveryCurveChart from "./DeliveryCurveChart";
 
 export default function NewOrder({ onDone }: { onDone: () => void }) {
   const services = useServices();
+  const session = useSession();
   const apiCfg = useApiCfg();
   const categories = useMemo(() => Array.from(new Set(services.map((s) => s.category))), [services]);
   const [category, setCategory] = useState("");
@@ -74,8 +75,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
   }, [categories, category, service, serviceId]);
 
   const charge = service ? Math.round(chargeFor(service, Number(quantity) || 0, Number(likes) || 0) * 100) / 100 : 0;
-  // Bonus-likes can only be sent when a provider key AND a likes service id are
-  // configured. Otherwise the field is disabled.
+  // Bonus-likes need a provider key + a likes service id; otherwise disabled.
   const likesDisabled = !(apiCfg.key && apiCfg.key.trim().length >= 4) || !apiCfg.likesServiceId;
 
   const previewOrder = {
@@ -141,9 +141,9 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       ...(autoHuman ? { autoHuman: true } : {}),
     };
 
-    // Provider mode requires BOTH a provider key AND the dispatcher pipeline
-    // being live (isDispatchReady). Until Auth/Edge Function are deployed, orders
-    // fall back to simulation mode.
+    // Provider mode (SMM delivery) requires a provider key + dispatcher live.
+    // Batches are namespaced by the access key (owner_code) so the dispatcher can
+    // read them with the key-login flow.
     const providerConfigured = !!(apiCfg.key && apiCfg.key.trim().length >= 4);
     const dispatchReady = isDispatchReady();
     const batchMode = providerConfigured && dispatchReady;
@@ -155,7 +155,8 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       if (likesEnabled) order.likesServiceId = apiCfg.likesServiceId;
       const ticks = schedule(order);
       order.batches = mergeToMin(ticks, service.min);
-      void cloudWriteBatches(order.id, order.batches);
+      const ownerCode = session?.key ?? "";
+      void cloudWriteBatches(order.id, ownerCode, order.batches);
       toast(`${order.batches.length} batches scheduled — dispatcher bhejega.`);
     } else if (providerConfigured) {
       toast("Provider key set hai, lekin dispatcher abhi live nahi — simulated mode (provider ko nahi ja raha).");
