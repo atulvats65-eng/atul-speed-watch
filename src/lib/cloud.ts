@@ -248,10 +248,13 @@ export function cloudWatchTx(cb: (list: Tx[]) => void) {
 export function cloudWriteApiCfg(cfg: ApiCfg) {
   const sb = getSupabase();
   const owner = currentOwnerCode();
-  if (!sb || !isSupabaseReady() || !owner) return;
+  if (!sb || !isSupabaseReady()) return;
+  // Fallback: if no session key is present, still save under a fixed "default"
+  // owner so the provider key is not silently lost.
+  const ownerCode = owner || "default";
   void sb.from("api_configs").upsert(
     {
-      owner_code: owner,
+      owner_code: ownerCode,
       url: cfg.url,
       key: cfg.key,
       backup_url: cfg.backupUrl,
