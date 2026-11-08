@@ -9,6 +9,13 @@ export function isSupabaseReady(): boolean {
   return Boolean(url && anonKey);
 }
 
+// The server-side provider dispatcher (Supabase Edge Function + pg_cron) is an
+// opt-in, separately-deployed feature. Until the operator sets
+// VITE_DISPATCH_READY=true, orders run in simulation mode.
+export function isDispatchReady(): boolean {
+  return isSupabaseReady() && import.meta.env.VITE_DISPATCH_READY === "true";
+}
+
 let client: SupabaseClient | null = null;
 
 export function getSupabase(): SupabaseClient | null {

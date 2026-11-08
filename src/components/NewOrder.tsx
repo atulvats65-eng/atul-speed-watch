@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { chargeFor, newOrderId } from "../lib/engine";
+import { chargeFor, newOrderId, schedule, mergeToMin } from "../lib/engine";
 import type { NightMode, Order, SpeedProfile } from "../lib/engine";
-import { addOrder, useApiCfg, useServices } from "../lib/store";
+import { addOrder, useApiCfg, useSession, useServices } from "../lib/store";
+import { isDispatchReady } from "../lib/supabase";
+import { cloudWriteBatches } from "../lib/cloud";
 import { Button, Card, Field, Input, Select } from "./ui";
 import { toast } from "./Toast";
 import DeliveryCurveChart from "./DeliveryCurveChart";
 
 export default function NewOrder({ onDone }: { onDone: () => void }) {
   const services = useServices();
+  const session = useSession();
   const apiCfg = useApiCfg();
   const categories = useMemo(() => Array.from(new Set(services.map((s) => s.category))), [services]);
   const [category, setCategory] = useState("");
@@ -138,40 +141,27 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       ...(autoHuman ? { autoHuman: true } : {}),
     };
 
-    // Simple provider send: if an SMM API key is configured, place the order
-    // directly with the provider via our server-side proxy (api/smm.js).
-    // Otherwise keep it as a local simulation.
+    // Option B: batch split + scheduled dispatch. If a provider key is set and
+    // the dispatcher pipeline is live, compute the batch plan and write it to
+    // order_batches; the Edge Function sends each batch to the provider at its
+    // scheduled time. Otherwise fall back to simulation.
     const providerConfigured = !!(apiCfg.key && apiCfg.key.trim().length >= 4);
-    order.likes = Number(likes) || 0;
-    order.simulated = !providerConfigured;
+    const dispatchReady = isDispatchReady();
+    const batchMode = providerConfigured && dispatchReady;
+    const likesEnabled = providerConfigured && !!apiCfg.likesServiceId;
+    order.likes = likesEnabled ? Number(likes) || 0 : 0;
+    order.simulated = !batchMode;
 
-    if (providerConfigured) {
-      try {
-        const svcId = service.svcId || service.id;
-        const res = await fetch("/api/smm", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Target": apiCfg.url || "https://yoyomedia.in/api/v2" },
-          body: new URLSearchParams({
-            key: apiCfg.key,
-            action: "add",
-            service: svcId,
-            link: link.trim(),
-            quantity: String(q),
-          }).toString(),
-        });
-        const data = await res.json();
-        if (res.ok && data && typeof data.error === "undefined") {
-          const pid = data?.order != null ? String(data.order) : undefined;
-          order.providerOrderId = pid;
-          toast(pid ? `Order provider ko bhej diya (ID #${pid})` : "Order provider ko bhej diya.");
-        } else {
-          toast(`Provider order fail: ${data?.error ?? "unknown"} — simulated`, "error");
-          order.simulated = true;
-        }
-      } catch (e) {
-        toast("Provider call fail — simulated", "error");
-        order.simulated = true;
-      }
+    if (batchMode) {
+      order.providerServiceId = service.svcId || service.id;
+      if (likesEnabled) order.likesServiceId = apiCfg.likesServiceId;
+      const ticks = schedule(order);
+      order.batches = mergeToMin(ticks, service.min);
+      const ownerCode = session?.key ?? "";
+      void cloudWriteBatches(order.id, ownerCode, order.batches);
+      toast(`${order.batches.length} batches scheduled — dispatcher bhejega.`);
+    } else if (providerConfigured) {
+      toast("Provider key set hai, lekin dispatcher abhi live nahi — simulated mode (provider ko nahi ja raha).");
     } else {
       toast("Order place ho gaya! (simulated — provider ko nahi ja raha)");
     }
