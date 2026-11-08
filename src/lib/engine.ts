@@ -80,6 +80,8 @@ export interface Order {
   providerServiceId?: string;
   /** Configured likes provider service id (if `likesServiceId` is set). */
   likesServiceId?: string;
+  /** Provider's order id when the order was placed with the SMM provider. */
+  providerOrderId?: string;
 }
 
 export function profileParams(o: Order): ProfileParams {

@@ -14,9 +14,18 @@ import type { PanelUser, ApiCfg, Tx } from "./store";
 function currentOwnerCode(): string {
   try {
     const raw = localStorage.getItem("atul_session");
-    if (!raw) return "";
-    const s = JSON.parse(raw) as { key?: string } | null;
-    return s?.key ?? "";
+    if (raw) {
+      const s = JSON.parse(raw) as { key?: string } | null;
+      if (s?.key) return s.key;
+    }
+    // Fallback: if the session has no key, look up an existing user key.
+    const usersRaw = localStorage.getItem("atul_users");
+    if (usersRaw) {
+      const users = JSON.parse(usersRaw) as Record<string, { key?: string }>;
+      const first = Object.values(users)[0];
+      if (first?.key) return first.key;
+    }
+    return "";
   } catch {
     return "";
   }
