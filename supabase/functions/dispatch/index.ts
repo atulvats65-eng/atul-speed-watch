@@ -42,10 +42,12 @@ async function assertSafeUrl(url: string, allowedHosts: string[]) {
 }
 
 async function getProviderConfig(ownerCode: string) {
+  // Shared config: always read the global row so per-order owner_code never
+  // causes the provider key to be missed.
   const { data } = await sb
     .from("api_configs")
     .select("url, key, provider_key_encrypted, likes_service_id, balance")
-    .eq("owner_code", ownerCode)
+    .eq("owner_code", "global")
     .maybeSingle();
   if (!data) return null;
   const key = data.provider_key_encrypted || data.key;
