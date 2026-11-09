@@ -47,7 +47,11 @@ export function cloudPushOrders(orders: Order[]) {
     data: o as unknown as Record<string, unknown>,
     updated_at: iso(),
   }));
-  void sb.from("cloud_orders").upsert(rows, { onConflict: "id" });
+  sb.from("cloud_orders")
+    .upsert(rows, { onConflict: "id" })
+    .then(({ error }) => {
+      if (error) console.error("cloud_orders upsert error:", error.message, error.details);
+    });
 }
 
 export function cloudRemoveOrder(id: string) {
