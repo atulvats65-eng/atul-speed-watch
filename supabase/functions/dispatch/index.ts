@@ -171,16 +171,32 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
     return;
   }
 
-  const { data: claimed } = await sb.rpc("claim_batch", {
-    p_owner: b.owner_code,
-    p_order: b.order_id,
-    p_idx: b.idx,
-  });
-  if (!claimed) return;
+  // Atomic claim via a single guarded UPDATE (no RPC — avoids the overload/type
+  // issues): only claims if still scheduled + due, sets a lease. We then
+  // re-read by lock_id to confirm we won it.
+  const lockId = crypto.randomUUID();
+  await sb
+    .from("order_batches")
+    .update({ state: "sending", lock_id: lockId, locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("owner_code", b.owner_code)
+    .eq("order_id", b.order_id)
+    .eq("idx", b.idx)
+    .eq("state", "scheduled")
+    .lte("next_attempt_at", new Date().toISOString());
 
-  const attempt = claimed.attempts;
+  const { data: verify } = await sb
+    .from("order_batches")
+    .select("idx, quantity, likes, attempts")
+    .eq("owner_code", b.owner_code)
+    .eq("order_id", b.order_id)
+    .eq("idx", b.idx)
+    .eq("lock_id", lockId)
+    .maybeSingle();
+  if (!verify) return;
+
+  const attempt = verify.attempts || 0;
   try {
-    const result = await sendBatch(cfg, order, claimed);
+    const result = await sendBatch(cfg, order, verify);
     if (result.providerOrderId) {
       await mark(b.owner_code, b.order_id, b.idx, { provider_order_id: result.providerOrderId });
     }
