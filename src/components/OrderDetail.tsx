@@ -48,7 +48,7 @@ export default function OrderDetail({ orderId, onBack }: { orderId: string; onBa
     ...(o.simulated ? ([[ "Delivery", "Simulated — provider ko nahi ja raha" ]] as [string, string][]) : []),
     ...(o.night && o.night !== "none" ? ([[ "Night Shield", o.night === "pause" ? "🌙 Pause 12–6 AM" : "🌙 Slow 12–6 AM" ]] as [string, string][]) : []),
     ["Placed", fmtTime(o.createdAt)],
-    ["Charge", `₹${o.charge.toFixed(2)}`],
+    ["Charge", `₹{(o.charge ?? 0).toFixed(2)}`],
     ["Start count", p.ticks[0] ? fmtTime(p.ticks[0]!.t) : "—"],
     ["Expected complete", fmtTime(p.eta)],
     ["Total drops", `${p.done.length} / ${p.ticks.length}`],

@@ -151,7 +151,7 @@ export default function OrderHistory({ onOpenDetail }: { onOpenDetail: (id: stri
                   <td className="whitespace-nowrap px-4 py-3 text-slate-500">{fmtTime(o.createdAt)}</td>
                   <td className="px-4 py-3 font-medium">{o.serviceName}</td>
                   <td className="max-w-40 truncate px-4 py-3 text-slate-500">{o.link}</td>
-                  <td className="px-4 py-3">₹{o.charge.toFixed(2)}</td>
+                  <td className="px-4 py-3">₹{(o.charge ?? 0).toFixed(2)}</td>
                   <td className="px-4 py-3">{o.quantity.toLocaleString("en-IN")}</td>
                   <td className="px-4 py-3">{p.delivered.toLocaleString("en-IN")}</td>
                   <td className="px-4 py-3">{p.remains.toLocaleString("en-IN")}</td>
