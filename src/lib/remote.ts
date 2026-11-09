@@ -36,21 +36,12 @@ export async function remoteFetchOrders(): Promise<Order[] | null> {
 }
 
 export function remotePushOrder(order: Order) {
-  try {
-    void fetch(BASE, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(order),
-    }).catch(() => {});
-  } catch {
-    /* ignore */
-  }
+  // Vercel static hosting has no /api/orders server engine. Order sync is done
+  // via Supabase (cloud_orders), so this remote push is intentionally a no-op.
+  void order;
 }
 
 export function remoteRemoveOrder(id: string) {
-  try {
-    void fetch(`${BASE}/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
-  } catch {
-    /* ignore */
-  }
+  // No-op on Vercel (no server-side order store).
+  void id;
 }
