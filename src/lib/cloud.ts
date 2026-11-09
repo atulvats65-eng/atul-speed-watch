@@ -39,8 +39,8 @@ function iso(): string {
 
 export function cloudPushOrders(orders: Order[]) {
   const sb = getSupabase();
-  const owner = currentOwnerCode();
-  if (!sb || !isSupabaseReady() || !owner) return;
+  const owner = currentOwnerCode() || "default";
+  if (!sb || !isSupabaseReady()) return;
   const rows = orders.map((o) => ({
     id: o.id,
     owner_code: owner,
@@ -318,9 +318,10 @@ export async function cloudWriteBatches(
   batches: { index: number; t: number; quantity: number; likes: number }[],
 ): Promise<void> {
   const sb = getSupabase();
-  if (!sb || !isSupabaseReady() || !ownerCode) return;
+  if (!sb || !isSupabaseReady()) return;
+  const owner = ownerCode || "default";
   const rows = batches.map((b) => ({
-    owner_code: ownerCode,
+    owner_code: owner,
     order_id: orderId,
     idx: b.index,
     t: new Date(b.t).toISOString(),
