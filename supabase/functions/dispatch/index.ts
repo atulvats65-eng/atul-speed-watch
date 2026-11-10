@@ -171,28 +171,19 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
     return;
   }
 
-  // Atomic claim via a single guarded UPDATE (no RPC): only claims if still
-  // scheduled, sets a lease and increments attempts. We then re-read by
-  // lock_id to confirm we won it.
-  const lockId = `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
-  await sb
-    .from("order_batches")
-    .update({ state: "sending", attempts: 0, lock_id: lockId, locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .eq("owner_code", b.owner_code)
-    .eq("order_id", b.order_id)
-    .eq("idx", b.idx)
-    .eq("state", "scheduled");
-
+  // Simple claim: read the batch directly (must still be scheduled). No lock /
+  // verify round-trip — we mark it sending after we send. This avoids any
+  // lock_id/verify mismatch that was silently skipping batches.
   const { data: verify } = await sb
     .from("order_batches")
     .select("idx, quantity, likes, attempts")
     .eq("owner_code", b.owner_code)
     .eq("order_id", b.order_id)
     .eq("idx", b.idx)
-    .eq("lock_id", lockId)
+    .eq("state", "scheduled")
     .maybeSingle();
   if (!verify) {
-    console.error("DISPTACH verify failed for", b.owner_code, b.order_id, b.idx, "lockId", lockId);
+    console.error("DISPATCH not scheduled", b.owner_code, b.order_id, b.idx);
     return;
   }
 
