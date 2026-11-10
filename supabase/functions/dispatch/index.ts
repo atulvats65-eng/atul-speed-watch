@@ -174,7 +174,7 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
   // Atomic claim via a single guarded UPDATE (no RPC): only claims if still
   // scheduled, sets a lease and increments attempts. We then re-read by
   // lock_id to confirm we won it.
-  const lockId = crypto.randomUUID();
+  const lockId = `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
   await sb
     .from("order_batches")
     .update({ state: "sending", attempts: 0, lock_id: lockId, locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
