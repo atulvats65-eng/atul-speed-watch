@@ -171,18 +171,17 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
     return;
   }
 
-  // Atomic claim via a single guarded UPDATE (no RPC — avoids the overload/type
-  // issues): only claims if still scheduled + due, sets a lease. We then
-  // re-read by lock_id to confirm we won it.
+  // Atomic claim via a single guarded UPDATE (no RPC): only claims if still
+  // scheduled, sets a lease and increments attempts. We then re-read by
+  // lock_id to confirm we won it.
   const lockId = crypto.randomUUID();
   await sb
     .from("order_batches")
-    .update({ state: "sending", lock_id: lockId, locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .update({ state: "sending", attempts: 0, lock_id: lockId, locked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .eq("owner_code", b.owner_code)
     .eq("order_id", b.order_id)
     .eq("idx", b.idx)
-    .eq("state", "scheduled")
-    .lte("next_attempt_at", new Date().toISOString());
+    .eq("state", "scheduled");
 
   const { data: verify } = await sb
     .from("order_batches")
