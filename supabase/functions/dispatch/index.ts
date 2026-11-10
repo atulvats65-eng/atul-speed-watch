@@ -191,7 +191,10 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
     .eq("idx", b.idx)
     .eq("lock_id", lockId)
     .maybeSingle();
-  if (!verify) return;
+  if (!verify) {
+    console.error("DISPTACH verify failed for", b.owner_code, b.order_id, b.idx, "lockId", lockId);
+    return;
+  }
 
   const attempt = verify.attempts || 0;
   try {
