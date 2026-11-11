@@ -46,13 +46,13 @@ async function getProviderConfig(ownerCode: string) {
   // causes the provider key to be missed. Only select columns that exist.
   const { data } = await sb
     .from("api_configs")
-    .select("url, key, likes_service_id, balance")
+    .select("url, key")
     .eq("owner_code", "global")
     .maybeSingle();
   if (!data) return null;
   const key = data.key;
   if (!key) return null;
-  return { url: data.url, key, likesServiceId: data.likes_service_id, balance: data.balance };
+  return { url: data.url, key, likesServiceId: undefined, balance: undefined };
 }
 
 async function getOrderData(ownerCode: string, orderId: string) {
