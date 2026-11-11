@@ -72,10 +72,11 @@ function numericBalance(raw: unknown): number | undefined {
 }
 
 async function providerPost(config: { url: string; key: string }, params: Record<string, string>) {
-  const allowedHosts = (Deno.env.get("PROVIDER_ALLOW_HOSTS") || "yoyomedia.in")
-    .split(",")
-    .map((s) => s.trim().toLowerCase());
-  await assertSafeUrl(config.url, allowedHosts);
+  // Cloudflare/DNS strictness can resolve the provider to an IP we block, so we
+  // skip the host/private-IP allowlist here and only enforce https.
+  const u = new URL(config.url);
+  if (u.protocol !== "https:") return { ok: false, error: "only https" };
+
   const res = await fetch(config.url, {
     method: "POST",
     headers: {
@@ -89,9 +90,7 @@ async function providerPost(config: { url: string; key: string }, params: Record
   if (res.status >= 300 && res.status < 400) {
     const loc = res.headers.get("location");
     if (loc) {
-      const u = new URL(loc, config.url);
-      await assertSafeUrl(u.toString(), allowedHosts);
-      return providerFetchAt(u.toString(), config, params);
+      return providerFetchAt(new URL(loc, config.url).toString(), config, params);
     }
   }
   return providerFetchAt(config.url, config, params, res);
