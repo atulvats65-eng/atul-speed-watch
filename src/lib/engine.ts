@@ -150,7 +150,7 @@ function sCurveSchedule(o: Order): Tick[] {
   const r0 = raw(0);
   const r1 = raw(1);
   const frac = (x: number) => (raw(x) - r0) / (r1 - r0);
-  const minBatch = Math.min(100, Math.max(1, Math.round(q * 0.01)));
+  const minBatch = BATCH_MIN_QTY; // never produce batches below the provider minimum
 
   const ticks: Tick[] = [];
   const firstAmount = Math.min(minBatch, q);
