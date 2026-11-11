@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { signOut, useSession } from "../lib/store";
 import { GhostButton } from "./ui";
-import ProviderBalance from "./ProviderBalance";
 import HackerBg from "./HackerBg";
 
 export type View = "dashboard" | "new-order" | "orders" | "order-detail" | "services" | "smm-api" | "admin" | "settings";
@@ -52,7 +51,6 @@ export default function AppShell({ view, onNavigate, children }: { view: View; o
             ))}
           </nav>
 
-          <ProviderBalance />
           <GhostButton className="text-emerald-200/80 hover:bg-white/10" onClick={() => signOut()}>Logout</GhostButton>
         </div>
       </header>

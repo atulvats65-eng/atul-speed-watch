@@ -202,6 +202,15 @@ async function processBatch(b: { owner_code: string; order_id: string; idx: numb
       return;
     }
 
+    // Only mark SENT when the provider gave us an order id. If it didn't, the
+    // provider did NOT accept/place the order — mark needs_review so it can be
+    // reconciled instead of falsely showing sent.
+    if (!result.providerOrderId) {
+      await mark(b.owner_code, b.order_id, b.idx, { state: "needs_review", last_error: "provider did not return order id" });
+      return;
+    }
+
+    await mark(b.owner_code, b.order_id, b.idx, { provider_order_id: result.providerOrderId });
     const patch: Record<string, unknown> = { state: "sent", last_error: null };
     if (result.likes) {
       if (result.likes.ok) {
