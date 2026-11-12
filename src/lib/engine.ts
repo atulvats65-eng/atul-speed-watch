@@ -145,7 +145,11 @@ function sCurveSchedule(o: Order): Tick[] {
   const duration = o.durationMs
     ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
     : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
-  const n = Math.min(120, Math.max(12, Math.round(q / 120), Math.floor(duration / (2 * 60_000))));
+  const MIN_GAP = 15 * 60_000; // S-Curve: at least 15 min between batches
+  const n = Math.min(
+    Math.max(12, Math.floor(duration / MIN_GAP)), // max batches by 15-min gap
+    Math.max(12, Math.round(q / 120)),
+  );
   const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
   const r1 = raw(1);
