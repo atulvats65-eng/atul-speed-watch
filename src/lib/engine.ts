@@ -165,6 +165,8 @@ function sCurveSchedule(o: Order): Tick[] {
 
   let acc = 0;
   let accLikes = 0;
+  const MIN_GAP = 15 * 60_000; // S-Curve: at least 15 min between batches
+  let lastT = o.createdAt + 60_000;
   for (let i = 1; i <= n; i++) {
     const x = i / n;
     const target = Math.round(frac(x) * q);
@@ -174,7 +176,10 @@ function sCurveSchedule(o: Order): Tick[] {
     acc += inc;
     accLikes += Math.round((inc / q) * o.likes);
     if (acc < minBatch) continue;
-    const t = o.createdAt + Math.round(x * duration);
+    // enforce >= 15 min gap from the previous batch
+    let t = o.createdAt + Math.round(x * duration);
+    if (t < lastT + MIN_GAP) t = lastT + MIN_GAP;
+    lastT = t;
     ticks.push({ t, amount: acc, likes: accLikes, cumulative: prev });
     acc = 0;
     accLikes = 0;
