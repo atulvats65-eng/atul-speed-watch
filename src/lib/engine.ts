@@ -97,7 +97,7 @@ export function profileParams(o: Order): ProfileParams {
 
 const SCURVE_PER_1000 = 15 * 60_000; // ~15 min per 1000 units (2x faster)
 const SCURVE_MIN = 30 * 60_000; // minimum S-curve window (R1)
-const SCURVE_MAX = 6 * 3600_000; // cap at 6 hours
+const SCURVE_MAX = 7 * 24 * 3600_000; // cap at 7 days (allows 48h custom windows)
 const SCURVE_STEEP = 12;
 
 // Hard cap: no single drop may exceed this many units, regardless of profile.
