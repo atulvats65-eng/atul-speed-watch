@@ -169,7 +169,7 @@ function sCurveSchedule(o: Order): Tick[] {
 
   let acc = 0;
   let accLikes = 0;
-  const MIN_GAP = 15 * 60_000; // S-Curve: at least 15 min between batches
+  const MIN_GAP = 5 * 60_000; // tiny floor to keep batches monotonic
   let lastT = o.createdAt + 60_000;
   for (let i = 1; i <= n; i++) {
     const x = i / n;
@@ -180,7 +180,8 @@ function sCurveSchedule(o: Order): Tick[] {
     acc += inc;
     accLikes += Math.round((inc / q) * o.likes);
     if (acc < minBatch) continue;
-    // enforce >= 15 min gap from the previous batch
+    // Time follows the schedule (sigmoid) — the batch lands when its cumulative
+    // qty is due within the window. Only a tiny floor keeps it monotonic.
     let t = o.createdAt + Math.round(x * duration);
     if (t < lastT + MIN_GAP) t = lastT + MIN_GAP;
     lastT = t;
