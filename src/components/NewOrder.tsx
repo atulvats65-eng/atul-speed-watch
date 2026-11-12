@@ -121,6 +121,9 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
 
     const createdAt = startTime ? new Date(startTime).getTime() : Date.now();
     if (Number.isNaN(createdAt)) return setError("Start time sahi nahi hai.");
+    // For S-Curve, if the user set a future start time, use it as the custom
+    // delivery window (durationMs) so the schedule runs over that duration.
+    const sCurveDuration = profile === "scurve" && startTime ? Math.max(0, createdAt - Date.now()) : undefined;
     const order: Order = {
       id: newOrderId(),
       serviceId: service.id,
@@ -138,6 +141,7 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
       night,
       humanize,
       ...(durationMs ? { durationMs } : {}),
+      ...(sCurveDuration ? { durationMs: sCurveDuration } : {}),
       ...(autoHuman ? { autoHuman: true } : {}),
     };
 
