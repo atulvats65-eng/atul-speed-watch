@@ -67,73 +67,57 @@ const SCURVE_MAX = 7 * 24 * 3600_000; // cap at 7 days (allows custom 48h window
 const SCURVE_STEEP = 12;
 const BATCH_MIN_QTY = 100;
 
-// S-Curve delivery: cumulative delivered follows a sigmoid (slow ramp-up, fast
-// middle, tapering tail). No per-tick floor — small increments are accumulated
-// and released only when they reach minBatch (BATCH_MIN_QTY). The first drop is
-// ~minBatch at +60s, and the last tick lands exactly on q at the scheduled end.
-// Mirrors src/lib/engine.ts sCurveSchedule exactly (E4).
+// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units, and the
+// final batch lands exactly at the end of the scheduled window (durationMs).
 function sCurveSchedule(o) {
   const q = o.quantity;
   const duration = o.durationMs
     ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
     : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
   const MIN_GAP = 5 * 60_000; // tiny floor to keep batches monotonic
-  const n = Math.min(
-    Math.max(12, Math.floor(duration / MIN_GAP)),
-    Math.max(12, Math.round(q / 120)),
-  );
   const raw = (x) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
   const r1 = raw(1);
-  const frac = (x) => (raw(x) - r0) / (r1 - r0);
-  const minBatch = BATCH_MIN_QTY;
+  // Inverse sigmoid: given a delivered fraction f (0..1), return the time
+  // fraction x where cumulative delivery reaches f.
+  const fracInv = (f) => {
+    const v = Math.min(0.9999, Math.max(0.0001, r0 + f * (r1 - r0)));
+    return 0.5 - Math.log(1 / v - 1) / SCURVE_STEEP;
+  };
+
+  // Split q into batches of 100..250 (as equal as possible).
+  const N = Math.max(1, Math.ceil(q / 250));
+  const base = Math.floor(q / N);
+  const rem = q % N;
+  const sizes = [];
+  for (let i = 0; i < N; i++) sizes.push(base + (i < rem ? 1 : 0));
 
   const ticks = [];
-  const firstAmount = Math.min(minBatch, q);
-  let prev = firstAmount;
-  ticks.push({
-    t: o.createdAt + 60_000,
-    amount: firstAmount,
-    likes: Math.round((firstAmount / q) * (o.likes || 0)),
-    cumulative: firstAmount,
-  });
-  if (prev >= q) return ticks;
-
-  let acc = 0;
-  let accLikes = 0;
-  let lastT = o.createdAt + 60_000;
-  for (let i = 1; i <= n; i++) {
-    const x = i / n;
-    const target = Math.round(frac(x) * q);
-    if (target <= prev) continue;
-    const inc = target - prev;
-    prev = target;
-    acc += inc;
-    accLikes += Math.round((inc / q) * (o.likes || 0));
-    if (acc < minBatch) continue;
-    // Time follows the schedule (sigmoid) — the batch lands when its cumulative
-    // qty is due within the window. Only a tiny floor keeps it monotonic.
-    let t = o.createdAt + Math.round(x * duration);
+  let cum = 0;
+  let likesAcc = 0;
+  let lastT = o.createdAt;
+  for (let i = 0; i < N; i++) {
+    cum += sizes[i];
+    const likes = i === N - 1
+      ? (o.likes || 0) - likesAcc
+      : Math.round((sizes[i] / q) * (o.likes || 0));
+    likesAcc += likes;
+    const p = (i + 1) / N;
+    let t = o.createdAt + Math.round(fracInv(p) * duration);
+    if (t < o.createdAt + 60_000) t = o.createdAt + 60_000;
     if (t < lastT + MIN_GAP) t = lastT + MIN_GAP;
     lastT = t;
-    ticks.push({ t, amount: acc, likes: accLikes, cumulative: prev });
-    acc = 0;
-    accLikes = 0;
-    if (prev >= q) break;
+    ticks.push({ t, amount: sizes[i], likes, cumulative: cum });
   }
 
-  const delivered = ticks.length ? ticks[ticks.length - 1].cumulative : 0;
-  const leftover = q - delivered;
-  if (leftover > 0) {
-    // Land the final remainder exactly at the end of the scheduled window.
-    ticks.push({
-      t: o.createdAt + duration,
-      amount: leftover,
-      likes: Math.round((leftover / q) * (o.likes || 0)),
-      cumulative: q,
-    });
-  } else if (ticks.length > 0) {
-    ticks[ticks.length - 1].cumulative = q;
+  // Guarantee the last batch lands exactly at the scheduled end time.
+  if (ticks.length > 0) {
+    const last = ticks[ticks.length - 1];
+    last.t = o.createdAt + duration;
+    last.cumulative = q;
+    if (ticks.length > 1 && last.t < ticks[ticks.length - 2].t) {
+      last.t = ticks[ticks.length - 2].t + MIN_GAP;
+    }
   }
   return ticks;
 }
