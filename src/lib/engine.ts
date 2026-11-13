@@ -145,7 +145,7 @@ function sCurveSchedule(o: Order): Tick[] {
   const duration = o.durationMs
     ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
     : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
-  const MIN_GAP = 15 * 60_000; // S-Curve: at least 15 min between batches
+  const MIN_GAP = 5 * 60_000; // tiny floor to keep batches monotonic
   const n = Math.min(
     Math.max(12, Math.floor(duration / MIN_GAP)), // max batches by 15-min gap
     Math.max(12, Math.round(q / 120)),
@@ -169,7 +169,6 @@ function sCurveSchedule(o: Order): Tick[] {
 
   let acc = 0;
   let accLikes = 0;
-  const MIN_GAP = 5 * 60_000; // tiny floor to keep batches monotonic
   let lastT = o.createdAt + 60_000;
   for (let i = 1; i <= n; i++) {
     const x = i / n;
@@ -195,16 +194,17 @@ function sCurveSchedule(o: Order): Tick[] {
   const delivered = ticks.length ? ticks[ticks.length - 1]!.cumulative : 0;
   const leftover = q - delivered;
   if (leftover > 0) {
-    if (ticks.length > 0) {
-      const last = ticks[ticks.length - 1]!;
-      last.amount += leftover;
-      last.likes += Math.round((leftover / q) * o.likes);
-      last.cumulative = q;
-    } else {
-      ticks.push({ t: o.createdAt + 60_000, amount: q, likes: o.likes, cumulative: q });
-    }
+    // Land the final remainder exactly at the end of the scheduled window so the
+    // last batch visibly delivers at the user's chosen time (e.g. 48h).
+    ticks.push({
+      t: o.createdAt + duration,
+      amount: leftover,
+      likes: Math.round((leftover / q) * o.likes),
+      cumulative: q,
+    });
+  } else if (ticks.length > 0) {
+    ticks[ticks.length - 1]!.cumulative = q;
   }
-  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
   return ticks;
 }
 
