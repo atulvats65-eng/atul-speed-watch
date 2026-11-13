@@ -137,8 +137,9 @@ function paceAt(profile: string | undefined, frac: number): number {
 // S-Curve delivery: cumulative delivered follows a sigmoid (slow ramp-up, fast
 // middle, tapering tail). No per-tick floor — small increments are accumulated
 // and released only when they reach minBatch (~1% of q, capped 1..100). The
-// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units, and the
-// final batch lands exactly at the end of the scheduled window (durationMs).
+// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units with
+// randomized sizes (seeded PRNG → same order always gives the same schedule),
+// and the final batch lands exactly at the scheduled end time (durationMs).
 function sCurveSchedule(o: Order): Tick[] {
   const q = o.quantity;
   // Honor a custom timed window (durationMs) if set — otherwise use the profile
@@ -157,12 +158,28 @@ function sCurveSchedule(o: Order): Tick[] {
     return 0.5 - Math.log(1 / v - 1) / SCURVE_STEEP;
   };
 
-  // Split q into batches of 100..250 (as equal as possible).
-  const N = Math.max(1, Math.ceil(q / 250));
-  const base = Math.floor(q / N);
-  const rem = q % N;
-  const sizes: number[] = [];
-  for (let i = 0; i < N; i++) sizes.push(base + (i < rem ? 1 : 0));
+  // Number of batches: average ~175 units → sizes vary in 100..250.
+  const minN = Math.max(1, Math.ceil(q / 250));
+  const maxN = Math.max(minN, Math.floor(q / 100));
+  const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)));
+
+  // Seeded PRNG so the same order always yields the same schedule.
+  const rnd = mulberry32((o.createdAt || 0) ^ 0x9e3779b9);
+
+  // Random sizes within 100..250 that sum exactly to q.
+  const sizes: number[] = new Array(N).fill(Math.floor(q / N));
+  for (let i = 0; i < q % N; i++) sizes[i]++;
+  // Jitter: move units between random pairs while keeping every batch in [100,250].
+  for (let k = 0; k < 2000; k++) {
+    const a = Math.floor(rnd() * N);
+    const b = Math.floor(rnd() * N);
+    if (a === b) continue;
+    if (rnd() < 0.5) {
+      if (sizes[a] > 100 && sizes[b] < 250) { sizes[a]--; sizes[b]++; }
+    } else {
+      if (sizes[a] < 250 && sizes[b] > 100) { sizes[a]++; sizes[b]--; }
+    }
+  }
 
   const ticks: Tick[] = [];
   let cum = 0;

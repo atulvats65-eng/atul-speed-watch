@@ -67,8 +67,9 @@ const SCURVE_MAX = 7 * 24 * 3600_000; // cap at 7 days (allows custom 48h window
 const SCURVE_STEEP = 12;
 const BATCH_MIN_QTY = 100;
 
-// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units, and the
-// final batch lands exactly at the end of the scheduled window (durationMs).
+// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units with
+// randomized sizes (seeded PRNG → same order always gives the same schedule),
+// and the final batch lands exactly at the scheduled end time (durationMs).
 function sCurveSchedule(o) {
   const q = o.quantity;
   const duration = o.durationMs
@@ -85,12 +86,28 @@ function sCurveSchedule(o) {
     return 0.5 - Math.log(1 / v - 1) / SCURVE_STEEP;
   };
 
-  // Split q into batches of 100..250 (as equal as possible).
-  const N = Math.max(1, Math.ceil(q / 250));
-  const base = Math.floor(q / N);
-  const rem = q % N;
-  const sizes = [];
-  for (let i = 0; i < N; i++) sizes.push(base + (i < rem ? 1 : 0));
+  // Number of batches: average ~175 units → sizes vary in 100..250.
+  const minN = Math.max(1, Math.ceil(q / 250));
+  const maxN = Math.max(minN, Math.floor(q / 100));
+  const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)));
+
+  // Seeded PRNG so the same order always yields the same schedule.
+  const rnd = mulberry32((o.createdAt || 0) ^ 0x9e3779b9);
+
+  // Random sizes within 100..250 that sum exactly to q.
+  const sizes = new Array(N).fill(Math.floor(q / N));
+  for (let i = 0; i < q % N; i++) sizes[i]++;
+  // Jitter: move units between random pairs while keeping every batch in [100,250].
+  for (let k = 0; k < 2000; k++) {
+    const a = Math.floor(rnd() * N);
+    const b = Math.floor(rnd() * N);
+    if (a === b) continue;
+    if (rnd() < 0.5) {
+      if (sizes[a] > 100 && sizes[b] < 250) { sizes[a]--; sizes[b]++; }
+    } else {
+      if (sizes[a] < 250 && sizes[b] > 100) { sizes[a]++; sizes[b]--; }
+    }
+  }
 
   const ticks = [];
   let cum = 0;
