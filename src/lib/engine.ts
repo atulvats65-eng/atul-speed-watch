@@ -99,6 +99,10 @@ const SCURVE_PER_1000 = 15 * 60_000; // ~15 min per 1000 units (2x faster)
 const SCURVE_MIN = 30 * 60_000; // minimum S-curve window (R1)
 const SCURVE_MAX = 7 * 24 * 3600_000; // cap at 7 days (allows 48h custom windows)
 const SCURVE_STEEP = 12;
+const SCURVE_SLOT = 15 * 60_000; // nominal gap between S-curve batches
+const SCURVE_BATCH_MIN = 100;
+const SCURVE_BATCH_MAX = 250;
+const SCURVE_TARGET_AVG = 172; // target average batch size
 
 // Hard cap: no single drop may exceed this many units, regardless of profile.
 const MAX_DROP = 250;
@@ -137,88 +141,123 @@ function paceAt(profile: string | undefined, frac: number): number {
 // S-Curve delivery: cumulative delivered follows a sigmoid (slow ramp-up, fast
 // middle, tapering tail). No per-tick floor — small increments are accumulated
 // and released only when they reach minBatch (~1% of q, capped 1..100). The
-// S-Curve: batches follow a sigmoid ramp, each batch is 100..250 units with
-// randomized sizes (seeded PRNG → same order always gives the same schedule),
-// and the final batch lands exactly at the scheduled end time (durationMs).
+// S-Curve v2 (organic, 15-min batches): batch SIZES follow a bell shape
+// (small -> peak in the middle -> small again), so the cumulative graph is a
+// smooth S. Times follow a ~15-min grid with small jitter (about 13-18 min)
+// plus an occasional longer pause, so batches never land on an exact clock
+// pattern. Every batch is 100..250 units (except a single-batch order smaller
+// than that), sizes sum exactly to quantity, and the plan is seeded per order
+// so refreshes never change it.
 function sCurveSchedule(o: Order): Tick[] {
   const q = o.quantity;
-  // Honor a custom timed window (durationMs) if set — otherwise use the profile
-  // duration. Gives the user control over the S-curve schedule time.
-  const duration = o.durationMs
-    ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
-    : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
-  const MIN_GAP = 15 * 60_000; // at least 15 min between batches
-  const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
-  const r0 = raw(0);
-  const r1 = raw(1);
-  // Inverse sigmoid: given a delivered fraction f (0..1), return the time
-  // fraction x where cumulative delivery reaches f.
-  const fracInv = (f: number): number => {
-    const v = Math.min(0.9999, Math.max(0.0001, r0 + f * (r1 - r0)));
-    return 0.5 - Math.log(1 / v - 1) / SCURVE_STEEP;
-  };
-
-  // Number of batches: average ~175 units → sizes vary in 100..250. Also cap by
-  // the window so 15-min gaps always fit (last batch still lands at duration).
-  const minN = Math.max(1, Math.ceil(q / 250));
-  const maxN = Math.max(minN, Math.floor(q / 100));
-  const maxByTime = Math.max(1, Math.floor((duration - 60_000) / MIN_GAP) + 1);
-  const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)), maxByTime);
-
-  // Seeded PRNG — unique per order (id + createdAt) so every order gets its own
-  // schedule while staying refresh-safe (same order → same plan).
   const seed = (hashInt(o.id || "") ^ ((o.createdAt || 0) >>> 0)) >>> 0;
   const rnd = mulberry32(seed || 1);
 
-  // Random sizes within 100..250 that sum exactly to q.
-  const sizes: number[] = new Array(N).fill(Math.floor(q / N));
-  for (let i = 0; i < q % N; i++) sizes[i]++;
-  // Jitter: move units between random pairs while keeping every batch in [100,250].
-  for (let k = 0; k < 2000; k++) {
-    const a = Math.floor(rnd() * N);
-    const b = Math.floor(rnd() * N);
-    if (a === b) continue;
-    if (rnd() < 0.5) {
-      if (sizes[a] > 100 && sizes[b] < 250) { sizes[a]--; sizes[b]++; }
-    } else {
-      if (sizes[a] < 250 && sizes[b] > 100) { sizes[a]++; sizes[b]--; }
+  // Single batch for small orders — splitting would break the 100 minimum.
+  if (q <= SCURVE_BATCH_MAX) {
+    const t = o.createdAt + Math.round((13 + rnd() * 5) * 60_000);
+    return [{ t, amount: q, likes: o.likes, cumulative: q }];
+  }
+
+  const minN = Math.ceil(q / SCURVE_BATCH_MAX);
+  const maxN = Math.floor(q / SCURVE_BATCH_MIN);
+  let N = Math.min(maxN, Math.max(minN, Math.round(q / SCURVE_TARGET_AVG)));
+
+  // If a delivery window was chosen, keep the batch count from quantity (so
+  // the bell shape survives) and spread by widening gaps. If the window is
+  // too short for 100..250 batches on a 15-min grid, the window must extend
+  // (e.g. 5000 views need at least 20 batches = 5 hours).
+  let baseGap = SCURVE_SLOT;
+  if (o.durationMs) {
+    const window = Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs));
+    if (window >= N * SCURVE_SLOT) baseGap = window / N;
+  }
+
+  // Bell weights: peak in the middle, about half at the ends, with jitter so
+  // no two orders share the same shape.
+  const weights: number[] = [];
+  let wSum = 0;
+  for (let i = 0; i < N; i++) {
+    const x = (i + 0.5) / N;
+    const bell = Math.exp(-((x - 0.5) * (x - 0.5)) / (2 * 0.28 * 0.28));
+    const w = (0.38 + 0.62 * bell) * (0.88 + rnd() * 0.24);
+    weights.push(w);
+    wSum += w;
+  }
+
+  // Sizes from weights, clamped to [100,250] with redistribution so sum = q.
+  const sizes = clampSizes(
+    weights.map((w) => (w / wSum) * q),
+    q,
+    SCURVE_BATCH_MIN,
+    SCURVE_BATCH_MAX
+  );
+  // Avoid two identical consecutive sizes (looks mechanical): nudge one and
+  // compensate on another batch so the total stays exact.
+  for (let i = 1; i < N; i++) {
+    if (sizes[i] === sizes[i - 1]) {
+      const delta = sizes[i]! < SCURVE_BATCH_MAX ? 1 : -1;
+      if (sizes[i]! + delta >= SCURVE_BATCH_MIN && sizes[i]! + delta <= SCURVE_BATCH_MAX) {
+        sizes[i]! += delta;
+        for (let j = N - 1; j >= 0; j--) {
+          if (j !== i && sizes[j]! - delta >= SCURVE_BATCH_MIN && sizes[j]! - delta <= SCURVE_BATCH_MAX) {
+            sizes[j]! -= delta;
+            break;
+          }
+        }
+      }
     }
   }
 
   const ticks: Tick[] = [];
   let cum = 0;
   let likesAcc = 0;
-  let lastT = o.createdAt;
+  let t = o.createdAt;
   for (let i = 0; i < N; i++) {
-    cum += sizes[i];
-    const likes = i === N - 1
-      ? o.likes - likesAcc
-      : Math.round((sizes[i] / q) * o.likes);
+    // ~15-min grid with jitter; ~10% of gaps get an extra session pause.
+    let gap = baseGap * (0.88 + rnd() * 0.24);
+    if (i > 1 && i < N - 1 && rnd() < 0.1) gap += (10 + rnd() * 8) * 60_000;
+    t += Math.round(gap);
+    if (o.night === "pause" && isNight(t)) {
+      const d = new Date(t + IST);
+      d.setUTCHours(7, 0, 0, 0);
+      let nt = d.getTime() - IST;
+      if (nt <= t) nt += 86_400_000;
+      t = nt;
+    }
+    cum += sizes[i]!;
+    const likes = i === N - 1 ? o.likes - likesAcc : Math.round((sizes[i]! / q) * o.likes);
     likesAcc += likes;
-    const p = (i + 1) / N;
-    let t = o.createdAt + Math.round(fracInv(p) * duration);
-    if (t < o.createdAt + 60_000) t = o.createdAt + 60_000;
-    if (t < lastT + MIN_GAP) t = lastT + MIN_GAP;
-    lastT = t;
-    ticks.push({ t, amount: sizes[i], likes, cumulative: cum });
+    ticks.push({ t, amount: sizes[i]!, likes, cumulative: cum });
   }
+  if (ticks.length > 0) ticks[ticks.length - 1]!.cumulative = q;
+  return ticks;
+}
 
-  // Guarantee the last batch lands exactly at the scheduled end time, and that
-  // it keeps ≥15 min from the previous batch (pull the previous one back if
-  // needed so the final gap is respected).
-  if (ticks.length > 0) {
-    const last = ticks[ticks.length - 1]!;
-    last.t = o.createdAt + duration;
-    last.cumulative = q;
-    if (ticks.length > 1) {
-      const prev = ticks[ticks.length - 2]!;
-      if (prev.t > last.t - MIN_GAP) prev.t = last.t - MIN_GAP;
-      if (ticks.length > 2 && prev.t <= ticks[ticks.length - 3]!.t) {
-        prev.t = ticks[ticks.length - 3]!.t + MIN_GAP;
+// Round + clamp raw sizes to integers in [min,max] summing exactly to q.
+function clampSizes(raw: number[], q: number, min: number, max: number): number[] {
+  const sizes = raw.map((v) => Math.max(min, Math.min(max, Math.round(v))));
+  for (let iter = 0; iter < 10000; iter++) {
+    const sum = sizes.reduce((a, b) => a + b, 0);
+    if (sum === q) break;
+    const diff = q - sum;
+    const order = sizes.map((s, i) => i).sort((a, b) => sizes[b]! - sizes[a]!);
+    let moved = false;
+    for (const idx of diff > 0 ? order : [...order].reverse()) {
+      if (diff > 0 && sizes[idx]! < max) {
+        sizes[idx]!++;
+        moved = true;
+        break;
+      }
+      if (diff < 0 && sizes[idx]! > min) {
+        sizes[idx]!--;
+        moved = true;
+        break;
       }
     }
+    if (!moved) break;
   }
-  return ticks;
+  return sizes;
 }
 
 const STEALTH_PER_1000 = 20 * 60_000; // ~20 min per 1000 units (2x faster)
