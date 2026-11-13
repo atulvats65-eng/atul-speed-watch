@@ -147,7 +147,7 @@ function sCurveSchedule(o: Order): Tick[] {
   const duration = o.durationMs
     ? Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, o.durationMs))
     : Math.min(SCURVE_MAX, Math.max(SCURVE_MIN, (q / 1000) * SCURVE_PER_1000));
-  const MIN_GAP = 5 * 60_000; // tiny floor to keep batches monotonic
+  const MIN_GAP = 15 * 60_000; // at least 15 min between batches
   const raw = (x: number) => 1 / (1 + Math.exp(-SCURVE_STEEP * (x - 0.5)));
   const r0 = raw(0);
   const r1 = raw(1);
@@ -158,10 +158,12 @@ function sCurveSchedule(o: Order): Tick[] {
     return 0.5 - Math.log(1 / v - 1) / SCURVE_STEEP;
   };
 
-  // Number of batches: average ~175 units → sizes vary in 100..250.
+  // Number of batches: average ~175 units → sizes vary in 100..250. Also cap by
+  // the window so 15-min gaps always fit (last batch still lands at duration).
   const minN = Math.max(1, Math.ceil(q / 250));
   const maxN = Math.max(minN, Math.floor(q / 100));
-  const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)));
+  const maxByTime = Math.max(1, Math.floor((duration - 60_000) / MIN_GAP) + 1);
+  const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)), maxByTime);
 
   // Seeded PRNG — unique per order (id + createdAt) so every order gets its own
   // schedule while staying refresh-safe (same order → same plan).
@@ -201,13 +203,19 @@ function sCurveSchedule(o: Order): Tick[] {
     ticks.push({ t, amount: sizes[i], likes, cumulative: cum });
   }
 
-  // Guarantee the last batch lands exactly at the scheduled end time.
+  // Guarantee the last batch lands exactly at the scheduled end time, and that
+  // it keeps ≥15 min from the previous batch (pull the previous one back if
+  // needed so the final gap is respected).
   if (ticks.length > 0) {
     const last = ticks[ticks.length - 1]!;
     last.t = o.createdAt + duration;
     last.cumulative = q;
-    if (ticks.length > 1 && last.t < ticks[ticks.length - 2]!.t) {
-      last.t = ticks[ticks.length - 2]!.t + MIN_GAP;
+    if (ticks.length > 1) {
+      const prev = ticks[ticks.length - 2]!;
+      if (prev.t > last.t - MIN_GAP) prev.t = last.t - MIN_GAP;
+      if (ticks.length > 2 && prev.t <= ticks[ticks.length - 3]!.t) {
+        prev.t = ticks[ticks.length - 3]!.t + MIN_GAP;
+      }
     }
   }
   return ticks;
