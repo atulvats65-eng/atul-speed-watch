@@ -119,11 +119,17 @@ export default function NewOrder({ onDone }: { onDone: () => void }) {
     if (profile === "custom" && (cMaxDrop < cMinDrop || cMaxGap < cMinGap))
       return setError("Custom drop/gap values are invalid.");
 
-    const createdAt = startTime ? new Date(startTime).getTime() : Date.now();
-    if (Number.isNaN(createdAt)) return setError("Start time sahi nahi hai.");
+    const now = Date.now();
+    let createdAt = now;
+    if (startTime) {
+      const t = new Date(startTime).getTime();
+      // createdAt kabhi past nahi ho sakta — agar start time past/abhi ka hai to
+      // abhi ka time use karo (taaki batches placement se pehle na banein).
+      if (!Number.isNaN(t) && t > now) createdAt = t;
+    }
     // For S-Curve, if the user set a future start time, use it as the custom
     // delivery window (durationMs) so the schedule runs over that duration.
-    const sCurveDuration = profile === "scurve" && startTime ? Math.max(0, createdAt - Date.now()) : undefined;
+    const sCurveDuration = profile === "scurve" && createdAt > now ? createdAt - now : undefined;
     const order: Order = {
       id: newOrderId(),
       serviceId: service.id,
