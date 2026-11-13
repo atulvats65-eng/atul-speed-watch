@@ -163,8 +163,10 @@ function sCurveSchedule(o: Order): Tick[] {
   const maxN = Math.max(minN, Math.floor(q / 100));
   const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)));
 
-  // Seeded PRNG so the same order always yields the same schedule.
-  const rnd = mulberry32((o.createdAt || 0) ^ 0x9e3779b9);
+  // Seeded PRNG — unique per order (id + createdAt) so every order gets its own
+  // schedule while staying refresh-safe (same order → same plan).
+  const seed = (hashInt(o.id || "") ^ ((o.createdAt || 0) >>> 0)) >>> 0;
+  const rnd = mulberry32(seed || 1);
 
   // Random sizes within 100..250 that sum exactly to q.
   const sizes: number[] = new Array(N).fill(Math.floor(q / N));
@@ -214,6 +216,16 @@ function sCurveSchedule(o: Order): Tick[] {
 const STEALTH_PER_1000 = 20 * 60_000; // ~20 min per 1000 units (2x faster)
 const STEALTH_MIN = 10 * 60_000;
 const STEALTH_MAX = 8 * 3600_000;
+
+// Simple string hash used to seed per-order randomness.
+function hashInt(s: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
 
 // Deterministic PRNG (mulberry32) so the same order always produces the same
 // schedule — consistent with the rest of the engine.

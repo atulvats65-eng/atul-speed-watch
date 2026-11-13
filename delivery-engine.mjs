@@ -91,8 +91,10 @@ function sCurveSchedule(o) {
   const maxN = Math.max(minN, Math.floor(q / 100));
   const N = Math.min(maxN, Math.max(minN, Math.round(q / 175)));
 
-  // Seeded PRNG so the same order always yields the same schedule.
-  const rnd = mulberry32((o.createdAt || 0) ^ 0x9e3779b9);
+  // Seeded PRNG — unique per order (id + createdAt) so every order gets its own
+  // schedule while staying refresh-safe (same order → same plan).
+  const seed = (hashInt(o.id || "") ^ ((o.createdAt || 0) >>> 0)) >>> 0;
+  const rnd = mulberry32(seed || 1);
 
   // Random sizes within 100..250 that sum exactly to q.
   const sizes = new Array(N).fill(Math.floor(q / N));
@@ -151,6 +153,16 @@ function mulberry32(a) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// Simple string hash used to seed per-order randomness.
+function hashInt(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
 }
 
 // Stealth delivery: mimics a real human. Small organic batches, session-based
