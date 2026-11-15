@@ -42,17 +42,24 @@ async function assertSafeUrl(url: string, allowedHosts: string[]) {
 }
 
 async function getProviderConfig(ownerCode: string) {
-  // Shared config: always read the global row so per-order owner_code never
-  // causes the provider key to be missed. Only select columns that exist.
-  const { data } = await sb
+  // Per-user config first (each user can save their own SMM key under their
+  // owner_code), then fall back to the shared global row so admin orders still
+  // use the global provider key. Only select columns that exist.
+  const { data: own } = await sb
+    .from("api_configs")
+    .select("url, key")
+    .eq("owner_code", ownerCode)
+    .maybeSingle();
+  if (own?.key) {
+    return { url: own.url, key: own.key, likesServiceId: undefined, balance: undefined };
+  }
+  const { data: g } = await sb
     .from("api_configs")
     .select("url, key")
     .eq("owner_code", "global")
     .maybeSingle();
-  if (!data) return null;
-  const key = data.key;
-  if (!key) return null;
-  return { url: data.url, key, likesServiceId: undefined, balance: undefined };
+  if (!g || !g.key) return null;
+  return { url: g.url, key: g.key, likesServiceId: undefined, balance: undefined };
 }
 
 async function getOrderData(ownerCode: string, orderId: string) {
